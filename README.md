@@ -8,13 +8,13 @@ Ngebut dibangun diatas [gnet](https://github.com/panjf2000/gnet), sebuah library
 Ngebut masih dalam tahap pengembangan dan belum siap untuk digunakan di production, disarankan untuk menggunakan Ngebut
 saat sudah rilis versi stabil.
 
-# Instalasi
+## Instalasi
 
 ```bash
 go get -u github.com/ryanbekhen/ngebut
 ```
 
-# Contoh Penggunaan
+## Contoh Penggunaan
 
 ```go
 package main
@@ -38,6 +38,6 @@ func main() {
 
 ```
 
-# Lisensi
+## Lisensi
 
 Ngebut dilisensikan di bawah lisensi MIT. Lihat [LISENSI](LISENSI) untuk informasi lebih lanjut.
