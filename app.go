@@ -81,7 +81,7 @@ func (a *App) Head(path string, handler ...HandlerFunc) {
 	a.router.Add(http.MethodHead, path, handler...)
 }
 
-func (a *App) Run() error {
+func (a *App) Listen() error {
 	hs := &httpServer{
 		addr:         a.config.Addr,
 		multicore:    a.config.MultiCore,

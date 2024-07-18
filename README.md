@@ -33,7 +33,7 @@ func main() {
 		return c.SendString("Hello, World!")
 	})
 
-	log.Fatal(app.Run())
+	log.Fatal(app.Listen())
 }
 
 ```
