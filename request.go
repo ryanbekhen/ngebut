@@ -229,6 +229,14 @@ func (r *Request) ProtoAtLeast(major, minor int) bool {
 	return r.ProtoMajor > major || r.ProtoMajor == major && r.ProtoMinor >= minor
 }
 
+func (r *Request) ContentType() string {
+	return r.Header.Get("Content-Type")
+}
+
+func (r *Request) Accept() string {
+	return r.Header.Get("Accept")
+}
+
 // BasicAuth returns the username and password provided in the request's
 // Authorization header, if the request uses HTTP Basic Authentication.
 // See RFC 2617, Section 2. Copied from net/http package.
@@ -259,10 +267,6 @@ func parseBasicAuth(auth string) (username, password string, ok bool) {
 		return "", "", false
 	}
 	return username, password, true
-}
-
-func needsFormData(contentType string) bool {
-	return strings.Contains(contentType, "application/x-www-form-urlencoded") || strings.Contains(contentType, "multipart/form-data")
 }
 
 func parseRequest(c gnet.Conn, data []byte) (*Request, error) {
@@ -309,7 +313,7 @@ func parseRequest(c gnet.Conn, data []byte) (*Request, error) {
 	}
 
 	// Parse body
-	if needsFormData(req.Header.Get("Content-Type")) && req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH" {
+	if req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH" {
 		bodyBytes, err := io.ReadAll(io.LimitReader(reader, 1<<20)) // 1 MB
 		if err != nil {
 			return nil, err

@@ -133,9 +133,3 @@ func (s *Server) ListenAndServe() error {
 		gnet.WithReuseAddr(true),
 	)
 }
-
-func notFound(w ResponseWriter, r *Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(404)
-	w.Write([]byte("404 Not Found"))
-}
