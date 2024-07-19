@@ -261,9 +261,13 @@ func parseBasicAuth(auth string) (username, password string, ok bool) {
 	return username, password, true
 }
 
+func needsFormData(contentType string) bool {
+	return strings.Contains(contentType, "application/x-www-form-urlencoded") || strings.Contains(contentType, "multipart/form-data")
+}
+
 func parseRequest(c gnet.Conn, data []byte) (*Request, error) {
 	req := &Request{
-		Header: Header{},
+		Header: make(Header),
 	}
 
 	reader := bufio.NewReader(bytes.NewReader(data))
@@ -305,8 +309,8 @@ func parseRequest(c gnet.Conn, data []byte) (*Request, error) {
 	}
 
 	// Parse body
-	if req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH" {
-		bodyBytes, err := io.ReadAll(reader)
+	if needsFormData(req.Header.Get("Content-Type")) && req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH" {
+		bodyBytes, err := io.ReadAll(io.LimitReader(reader, 1<<20)) // 1 MB
 		if err != nil {
 			return nil, err
 		}
