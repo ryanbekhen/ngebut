@@ -1,55 +1,97 @@
-# Ngebut
+<p align="center">
+  <a href="https://github.com/ryanbekhen/ngebut/releases"><img src="https://img.shields.io/github/release/ryanbekhen/ngebut.svg?style=flat-square" alt="GitHub release"></a>
+  <a href="https://pkg.go.dev/github.com/ryanbekhen/ngebut"><img src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white&style=flat-square" alt="Go Dev"></a>
+  <a href="https://github.com/ryanbekhen/ngebut/blob/master/LICENSE"><img src="https://img.shields.io/github/license/ryanbekhen/ngebut?style=flat-square" alt="License"></a>
+  <a href="https://goreportcard.com/report/github.com/ryanbekhen/ngebut"><img src="https://goreportcard.com/badge/github.com/ryanbekhen/ngebut?style=flat-square" alt="Go Report Card"></a>
+</p>
 
-Ngebut adalah sebuah web framework untuk Go yang dirancang untuk kecepatan dan efisiensi.
-Ngebut dibangun diatas [gnet](https://github.com/panjf2000/gnet), sebuah library non-blocking networking tercepat untuk Go.
+<p align="center">
+  <b>Ngebut</b> is a web framework for Go designed for speed and efficiency.
+  <br>
+  Built on top of <a href="https://github.com/panjf2000/gnet">gnet</a>, the fastest non-blocking networking library for Go.
+</p>
 
-## Peringatan
+> ⚠️ **Maintenance Notice**: Ngebut is currently under active development and maintenance. Some APIs may change before the first stable release.
 
-Ngebut masih dalam tahap pengembangan dan belum siap untuk digunakan di production, disarankan untuk menggunakan Ngebut
-saat sudah rilis versi stabil.
+## 📚 Documentation
 
-## Instalasi
+For more detailed documentation, please visit the [Go Package Documentation](https://pkg.go.dev/github.com/ryanbekhen/ngebut).
 
-```bash
-go get -u github.com/ryanbekhen/ngebut
+## 🏗️ Architecture
+
+```mermaid
+graph TD
+    A[Client Request] --> B[Ngebut Server]
+    B --> C{Router}
+    C --> D[Middleware Chain]
+    D --> E[Route Handler]
+    E --> F[Context Processing]
+    F --> G[Response Generation]
+    G --> H[Client]
+
+    subgraph "Ngebut Framework"
+    B[Ngebut Server<br>gnet-based]
+    C
+    D
+    E
+    F
+    G
+    end
 ```
 
-## Contoh Penggunaan
+> 💡 **Inspiration**: Ngebut is inspired by [GoFiber](https://github.com/gofiber/fiber) and [Hertz Framework](https://github.com/cloudwego/hertz), combining their best features with gnet's performance.
+
+## ⚡️ Quick Start
+
+```bash
+# Install the framework
+go get github.com/ryanbekhen/ngebut
+```
+
+## ✨ Features
+
+- **High Performance**: Built on gnet, one of the fastest non-blocking networking libraries for Go
+- **Simple API**: Intuitive and easy-to-use API for rapid development
+- **Flexible Routing**: Supports URL parameters and various HTTP methods
+- **Middleware Support**: Easily add middleware for logging, authentication, etc.
+- **Clean Architecture**: Well-organized and maintainable codebase
+
+## 🚀 Basic Example
+
+For a quick start, check out this simple example:
 
 ```go
 package main
 
 import (
 	"github.com/ryanbekhen/ngebut"
-	"strconv"
 )
 
 func main() {
-	server := &ngebut.Server{
-		Addr: "tcp://:3000",
-		Handler: ngebut.HandlerFunc(func(w ngebut.ResponseWriter, r *ngebut.Request) {
-			message := ""
-			for k, v := range r.Header {
-				message += k + ": " + v[0] + "\n"
-			}
+	server := ngebut.New(ngebut.DefaultConfig())
 
-			message += "IP: " + r.RemoteAddr + "\n"
-			message += "Content-Length: " + strconv.Itoa(int(r.ContentLength)) + "\n"
-			message += "Method: " + r.Method + "\n"
-			message += "URL: " + r.RequestURI + "\n"
-			message += "Proto: " + r.Proto + "\n"
+	server.GET("/", func(c *ngebut.Ctx) {
+		c.String("Hello, World!")
+	})
 
-			w.Write([]byte(message))
-		}),
-	}
-
-	if err := server.ListenAndServe(); err != nil {
-		panic(err)
-	}
+	server.Listen(":8080")
 }
-
 ```
 
-## Lisensi
+## 📖 Documentation
 
-Ngebut dilisensikan di bawah lisensi MIT. Lihat [LISENSI](LISENSI) untuk informasi lebih lanjut.
+For detailed documentation on server configuration, routing, middleware, and all other features, please refer to the [Go Package Documentation](https://pkg.go.dev/github.com/ryanbekhen/ngebut).
+
+## 🤝 Contributing
+
+Contributions are very welcome! Please submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📜 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
