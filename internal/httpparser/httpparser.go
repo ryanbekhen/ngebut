@@ -364,9 +364,6 @@ func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
 	buf = time.Now().AppendFormat(buf, "Mon, 02 Jan 2006 15:04:05 GMT")
 	buf = append(buf, "\r\n"...)
 
-	// Add Server header
-	buf = append(buf, "Server: ngebut\r\n"...)
-
 	// Add custom headers
 	for k, values := range header {
 		for _, v := range values {
