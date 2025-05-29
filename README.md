@@ -8,7 +8,7 @@
 <p align="center">
   <b>Ngebut</b> is a web framework for Go designed for speed and efficiency.
   <br>
-  Built on top of <a href="https://github.com/panjf2000/gnet">gnet</a>, the fastest non-blocking networking library for Go.
+  Built on top of <a href="https://github.com/panjf2000/gnet">gnet</a>, a high-performance non-blocking networking library for Go.
 </p>
 
 > ⚠️ **Maintenance Notice**: Ngebut is currently under active development and maintenance. Some APIs may change before the first stable release.
@@ -39,7 +39,7 @@ graph TD
     end
 ```
 
-> 💡 **Inspiration**: Ngebut is inspired by [GoFiber](https://github.com/gofiber/fiber) and [Hertz Framework](https://github.com/cloudwego/hertz), combining their best features with gnet's performance.
+> 💡 **Inspiration**: Ngebut is inspired by [GoFiber](https://github.com/gofiber/fiber) and [Hertz Framework](https://github.com/cloudwego/hertz), aiming to provide a similar developer experience while leveraging gnet for networking.
 
 ## ⚡️ Quick Start
 
@@ -50,11 +50,12 @@ go get github.com/ryanbekhen/ngebut
 
 ## ✨ Features
 
-- **High Performance**: Built on gnet, one of the fastest non-blocking networking libraries for Go
+- **Efficient Performance**: Built on gnet, a high-performance non-blocking networking library for Go
 - **Simple API**: Intuitive and easy-to-use API for rapid development
-- **Flexible Routing**: Supports URL parameters and various HTTP methods
-- **Middleware Support**: Easily add middleware for logging, authentication, etc.
-- **Clean Architecture**: Well-organized and maintainable codebase
+- **Flexible Routing**: Supports URL parameters and all standard HTTP methods (GET, POST, PUT, DELETE, etc.)
+- **Middleware Support**: Built-in middleware for access logging and session management
+- **Group Routing**: Organize routes with groups that share common prefixes and middleware
+- **Context-Based Handling**: Request and response handling through a powerful context object
 
 ## 🚀 Basic Example
 
@@ -81,6 +82,33 @@ func main() {
 ## 📖 Documentation
 
 For detailed documentation on server configuration, routing, middleware, and all other features, please refer to the [Go Package Documentation](https://pkg.go.dev/github.com/ryanbekhen/ngebut).
+
+## 📊 Benchmark Comparison
+
+Benchmark tests were conducted using [wrk](https://github.com/wg/wrk) with 4 threads for 10 seconds.
+
+🌟 **Benchmark Environment** 🌟
+- Device: MacBook Air M3
+- Processor: Apple M3
+- RAM: 16.00 GB
+- Disk: 460Gi
+- Operating System: darwin 15.5
+
+### Text Endpoint (1000 connections)
+| Framework | Requests/sec | Latency (avg) |
+|-----------|--------------|---------------|
+| Fiber     | 226,793.75   | 2.62ms        |
+| Ngebut    | 130,606.36   | 7.06ms        |
+| Net/HTTP  | 119,001.03   | 7.99ms        |
+
+### JSON Endpoint (1000 connections)
+| Framework | Requests/sec | Latency (avg) |
+|-----------|--------------|---------------|
+| Fiber     | 154,318.28   | 8.89ms        |
+| Ngebut    | 120,485.89   | 6.35ms        |
+| Net/HTTP  | 111,881.75   | 10.34ms       |
+
+*Note: Benchmark results may vary based on hardware and environment. Ngebut is still under active development and performance optimizations are ongoing.*
 
 ## 🤝 Contributing
 
