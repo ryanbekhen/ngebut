@@ -3,6 +3,7 @@
   <a href="https://pkg.go.dev/github.com/ryanbekhen/ngebut"><img src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white&style=flat-square" alt="Go Dev"></a>
   <a href="https://github.com/ryanbekhen/ngebut/blob/master/LICENSE"><img src="https://img.shields.io/github/license/ryanbekhen/ngebut?style=flat-square" alt="License"></a>
   <a href="https://goreportcard.com/report/github.com/ryanbekhen/ngebut"><img src="https://goreportcard.com/badge/github.com/ryanbekhen/ngebut?style=flat-square" alt="Go Report Card"></a>
+  <a href="https://github.com/ryanbekhen/ngebut/actions/workflows/unit-tests.yml"><img src="https://github.com/ryanbekhen/ngebut/actions/workflows/unit-tests.yml/badge.svg" alt="Unit Tests"></a>
 </p>
 
 <p align="center">
