@@ -231,18 +231,6 @@ func ReleaseContext(ctx *Ctx) {
 	contextPool.Put(ctx)
 }
 
-// Status sets the HTTP status code for the response.
-//
-// Parameters:
-//   - code: The HTTP status code to set (e.g., 200, 404, 500)
-//
-// Returns:
-//   - The context itself for method chaining
-func (c *Ctx) Status(code int) *Ctx {
-	c.statusCode = code
-	return c
-}
-
 // StatusCode returns the current HTTP status code set for the response.
 //
 // Returns:
@@ -280,6 +268,155 @@ func (c *Ctx) Path() string {
 		return ""
 	}
 	return c.Request.URL.Path
+}
+
+// IP returns the client's IP address.
+// It tries to determine the real IP address by checking various headers
+// that might be set by proxies, before falling back to the direct connection IP.
+//
+// The order of precedence is:
+// 1. X-Forwarded-For header (first value)
+// 2. X-Real-Ip header
+// 3. RemoteAddr from the request
+//
+// Returns:
+//   - The client's IP address as a string, or empty string if not determinable
+func (c *Ctx) IP() string {
+	// Check for X-Forwarded-For header first (for clients behind proxies)
+	if xff := c.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For can contain multiple IPs, the first one is the original client
+		// Find the first comma or end of string to extract the first IP
+		commaIdx := strings.IndexByte(xff, ',')
+		var firstIP string
+		if commaIdx > 0 {
+			firstIP = xff[:commaIdx]
+		} else {
+			firstIP = xff
+		}
+
+		// Trim spaces without allocating a new string when possible
+		firstIP = strings.TrimSpace(firstIP)
+		if firstIP != "" {
+			return firstIP
+		}
+	}
+
+	// Check for X-Real-IP header next
+	if xrip := c.Get("X-Real-Ip"); xrip != "" {
+		return xrip
+	}
+
+	// Fall back to RemoteAddr
+	if c.Request.RemoteAddr != "" {
+		// RemoteAddr is in the format "IP:port", so we need to extract just the IP
+		ip, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+		if err == nil {
+			return ip
+		}
+		return c.Request.RemoteAddr
+	}
+
+	return ""
+}
+
+// RemoteAddr returns the direct remote address of the request.
+// Unlike IP(), this method only looks at the RemoteAddr field of the request
+// and doesn't check any headers.
+//
+// Returns:
+//   - The remote IP address as a string, or empty string if not available
+func (c *Ctx) RemoteAddr() string {
+	if c.Request.RemoteAddr != "" {
+		ip, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+		if err == nil {
+			return ip
+		}
+		return c.Request.RemoteAddr
+	}
+	return ""
+}
+
+// UserAgent returns the value of the "User-Agent" header from the request,
+// or an empty string if the request is nil.
+func (c *Ctx) UserAgent() string {
+	if c.Request == nil {
+		return ""
+	}
+	return c.Request.Header.Get("User-Agent")
+}
+
+// Referer retrieves the "Referer" header value from the incoming HTTP request.
+// Returns an empty string if the request is nil or the header is absent.
+func (c *Ctx) Referer() string {
+	if c.Request == nil {
+		return ""
+	}
+	return c.Request.Header.Get("Referer")
+}
+
+// Host returns the host of the request.
+func (c *Ctx) Host() string {
+	if c.Request == nil {
+		return ""
+	}
+
+	// Use the Host header if available, otherwise fall back to the URL host
+	if host := c.Request.Header.Get("Host"); host != "" {
+		return host
+	}
+
+	// Fallback to the URL host if Host header is not set
+	return c.Request.URL.Host
+}
+
+// Protocol retrieves the protocol scheme (e.g., "http" or "https") from the request.
+// It first checks the URL.Scheme, then looks at the X-Forwarded-Proto header,
+// and finally determines based on TLS connection status.
+// Returns "http" as default if the protocol cannot be determined.
+func (c *Ctx) Protocol() string {
+	if c.Request == nil {
+		return ""
+	}
+
+	// First check if URL.Scheme is already set
+	if c.Request.URL.Scheme != "" {
+		return c.Request.URL.Scheme
+	}
+
+	// Check X-Forwarded-Proto header (common for proxies)
+	if proto := c.Request.Header.Get("X-Forwarded-Proto"); proto != "" {
+		return proto
+	}
+
+	// Check X-Forwarded-Protocol header (less common)
+	if proto := c.Request.Header.Get("X-Forwarded-Protocol"); proto != "" {
+		return proto
+	}
+
+	// Check Front-End-Https header (used by some proxies)
+	if c.Request.Header.Get("Front-End-Https") == "on" {
+		return "https"
+	}
+
+	// Check X-Forwarded-Ssl header
+	if c.Request.Header.Get("X-Forwarded-Ssl") == "on" {
+		return "https"
+	}
+
+	// Default to http
+	return "http"
+}
+
+// Status sets the HTTP status code for the response.
+//
+// Parameters:
+//   - code: The HTTP status code to set (e.g., 200, 404, 500)
+//
+// Returns:
+//   - The context itself for method chaining
+func (c *Ctx) Status(code int) *Ctx {
+	c.statusCode = code
+	return c
 }
 
 // Set sets a response header with the given key and value.
@@ -520,90 +657,6 @@ func (c *Ctx) Data(contentType string, data []byte) {
 	// in a single operation to avoid duplicate writes
 	c.write(data)
 	_, _ = c.Writer.Write(data)
-}
-
-// IP returns the client's IP address.
-// It tries to determine the real IP address by checking various headers
-// that might be set by proxies, before falling back to the direct connection IP.
-//
-// The order of precedence is:
-// 1. X-Forwarded-For header (first value)
-// 2. X-Real-Ip header
-// 3. RemoteAddr from the request
-//
-// Returns:
-//   - The client's IP address as a string, or empty string if not determinable
-func (c *Ctx) IP() string {
-	// Check for X-Forwarded-For header first (for clients behind proxies)
-	if xff := c.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For can contain multiple IPs, the first one is the original client
-		// Find the first comma or end of string to extract the first IP
-		commaIdx := strings.IndexByte(xff, ',')
-		var firstIP string
-		if commaIdx > 0 {
-			firstIP = xff[:commaIdx]
-		} else {
-			firstIP = xff
-		}
-
-		// Trim spaces without allocating a new string when possible
-		firstIP = strings.TrimSpace(firstIP)
-		if firstIP != "" {
-			return firstIP
-		}
-	}
-
-	// Check for X-Real-IP header next
-	if xrip := c.Get("X-Real-Ip"); xrip != "" {
-		return xrip
-	}
-
-	// Fall back to RemoteAddr
-	if c.Request.RemoteAddr != "" {
-		// RemoteAddr is in the format "IP:port", so we need to extract just the IP
-		ip, _, err := net.SplitHostPort(c.Request.RemoteAddr)
-		if err == nil {
-			return ip
-		}
-		return c.Request.RemoteAddr
-	}
-
-	return ""
-}
-
-// RemoteAddr returns the direct remote address of the request.
-// Unlike IP(), this method only looks at the RemoteAddr field of the request
-// and doesn't check any headers.
-//
-// Returns:
-//   - The remote IP address as a string, or empty string if not available
-func (c *Ctx) RemoteAddr() string {
-	if c.Request.RemoteAddr != "" {
-		ip, _, err := net.SplitHostPort(c.Request.RemoteAddr)
-		if err == nil {
-			return ip
-		}
-		return c.Request.RemoteAddr
-	}
-	return ""
-}
-
-// UserAgent returns the value of the "User-Agent" header from the request,
-// or an empty string if the request is nil.
-func (c *Ctx) UserAgent() string {
-	if c.Request == nil {
-		return ""
-	}
-	return c.Request.Header.Get("User-Agent")
-}
-
-// Referer retrieves the "Referer" header value from the incoming HTTP request.
-// Returns an empty string if the request is nil or the header is absent.
-func (c *Ctx) Referer() string {
-	if c.Request == nil {
-		return ""
-	}
-	return c.Request.Header.Get("Referer")
 }
 
 // UserData sets or get user-specific data in the context.
