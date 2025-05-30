@@ -319,7 +319,7 @@ func processRequest(hs *httpServer, hc *httpparser.Codec, req *Request, c gnet.C
 	dummyWriter := getDummyWriter()
 	defer releaseDummyWriter(dummyWriter)
 
-	ctx := GetContextFromRequest(dummyWriter, req)
+	ctx := getContextFromRequest(dummyWriter, req)
 	defer ReleaseContext(ctx)
 
 	// Set server header directly in context header
