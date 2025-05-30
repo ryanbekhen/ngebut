@@ -3,8 +3,9 @@ package log
 import (
 	"bytes"
 	"errors"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestLevelString tests the String method of Level
@@ -22,9 +23,8 @@ func TestLevelString(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		if got := test.level.String(); got != test.expected {
-			t.Errorf("Level(%d).String() = %s, expected %s", test.level, got, test.expected)
-		}
+		got := test.level.String()
+		assert.Equal(t, test.expected, got, "Level(%d).String() should match expected value", test.level)
 	}
 }
 
@@ -32,25 +32,15 @@ func TestLevelString(t *testing.T) {
 func TestLoggerCreation(t *testing.T) {
 	// Test New with nil writer
 	logger := New(nil, InfoLevel)
-	if logger == nil {
-		t.Fatal("New(nil, InfoLevel) returned nil")
-	}
-	if logger.writer == nil {
-		t.Error("New(nil, InfoLevel) should set writer to os.Stdout")
-	}
-	if logger.level != InfoLevel {
-		t.Errorf("New(nil, InfoLevel) set level to %v, expected %v", logger.level, InfoLevel)
-	}
+	assert.NotNil(t, logger, "New(nil, InfoLevel) should not return nil")
+	assert.NotNil(t, logger.writer, "New(nil, InfoLevel) should set writer to os.Stdout")
+	assert.Equal(t, InfoLevel, logger.level, "New(nil, InfoLevel) should set correct level")
 
 	// Test New with custom writer
 	buf := &bytes.Buffer{}
 	logger = New(buf, DebugLevel)
-	if logger.writer != buf {
-		t.Error("New(buf, DebugLevel) did not set the correct writer")
-	}
-	if logger.level != DebugLevel {
-		t.Errorf("New(buf, DebugLevel) set level to %v, expected %v", logger.level, DebugLevel)
-	}
+	assert.Equal(t, buf, logger.writer, "New(buf, DebugLevel) should set the correct writer")
+	assert.Equal(t, DebugLevel, logger.level, "New(buf, DebugLevel) should set the correct level")
 
 	// Test NewWithConfig
 	config := DefaultLoggerConfig()
@@ -59,18 +49,10 @@ func TestLoggerCreation(t *testing.T) {
 	config.TimeFormat = "custom-format"
 	config.NoColor = true
 	logger = NewWithConfig(config)
-	if logger.writer != buf {
-		t.Error("NewWithConfig did not set the correct writer")
-	}
-	if logger.level != WarnLevel {
-		t.Errorf("NewWithConfig set level to %v, expected %v", logger.level, WarnLevel)
-	}
-	if logger.timeFormat != "custom-format" {
-		t.Errorf("NewWithConfig set timeFormat to %v, expected custom-format", logger.timeFormat)
-	}
-	if !logger.noColor {
-		t.Error("NewWithConfig did not set noColor to true")
-	}
+	assert.Equal(t, buf, logger.writer, "NewWithConfig should set the correct writer")
+	assert.Equal(t, WarnLevel, logger.level, "NewWithConfig should set the correct level")
+	assert.Equal(t, "custom-format", logger.timeFormat, "NewWithConfig should set the correct timeFormat")
+	assert.True(t, logger.noColor, "NewWithConfig should set noColor to true")
 }
 
 // TestLoggerLevelMethods tests the level methods of Logger
@@ -78,43 +60,32 @@ func TestLoggerLevelMethods(t *testing.T) {
 	logger := New(nil, InfoLevel)
 
 	// Debug should return nil because level is InfoLevel
-	if event := logger.Debug(); event != nil {
-		t.Error("Debug() should return nil when level is InfoLevel")
-	}
+	event := logger.Debug()
+	assert.Nil(t, event, "Debug() should return nil when level is InfoLevel")
 
 	// Info should return an event
-	if event := logger.Info(); event == nil {
-		t.Error("Info() should return an event when level is InfoLevel")
-	} else if event.(*Event).level != InfoLevel {
-		t.Errorf("Info() returned event with level %v, expected %v", event.(*Event).level, InfoLevel)
-	}
+	event = logger.Info()
+	assert.NotNil(t, event, "Info() should return an event when level is InfoLevel")
+	assert.Equal(t, InfoLevel, event.(*Event).level, "Info() should return event with correct level")
 
 	// Warn should return an event
-	if event := logger.Warn(); event == nil {
-		t.Error("Warn() should return an event when level is InfoLevel")
-	} else if event.(*Event).level != WarnLevel {
-		t.Errorf("Warn() returned event with level %v, expected %v", event.(*Event).level, WarnLevel)
-	}
+	event = logger.Warn()
+	assert.NotNil(t, event, "Warn() should return an event when level is InfoLevel")
+	assert.Equal(t, WarnLevel, event.(*Event).level, "Warn() should return event with correct level")
 
 	// Error should return an event
-	if event := logger.Error(); event == nil {
-		t.Error("Error() should return an event when level is InfoLevel")
-	} else if event.(*Event).level != ErrorLevel {
-		t.Errorf("Error() returned event with level %v, expected %v", event.(*Event).level, ErrorLevel)
-	}
+	event = logger.Error()
+	assert.NotNil(t, event, "Error() should return an event when level is InfoLevel")
+	assert.Equal(t, ErrorLevel, event.(*Event).level, "Error() should return event with correct level")
 
 	// Fatal should always return an event
-	if event := logger.Fatal(); event == nil {
-		t.Error("Fatal() should always return an event")
-	} else if event.(*Event).level != FatalLevel {
-		t.Errorf("Fatal() returned event with level %v, expected %v", event.(*Event).level, FatalLevel)
-	}
+	event = logger.Fatal()
+	assert.NotNil(t, event, "Fatal() should always return an event")
+	assert.Equal(t, FatalLevel, event.(*Event).level, "Fatal() should return event with correct level")
 
 	// Test SetLevel and GetLevel
 	logger.SetLevel(DebugLevel)
-	if level := logger.GetLevel(); level != DebugLevel {
-		t.Errorf("GetLevel() returned %v after SetLevel(DebugLevel), expected %v", level, DebugLevel)
-	}
+	assert.Equal(t, DebugLevel, logger.GetLevel(), "GetLevel() should return correct level after SetLevel()")
 }
 
 // TestEventMethods tests the methods of Event
@@ -126,37 +97,29 @@ func TestEventMethods(t *testing.T) {
 	testErr := errors.New("test error")
 	// We can't access the err field directly, but we can verify the Err method returns the event
 	event := logger.Debug().Err(testErr)
-	if event == nil {
-		t.Error("Err() should return the event")
-	}
+	assert.NotNil(t, event, "Err() should return the event")
 
 	// Test Msg method
 	buf.Reset()
 	logger.Debug().Msg("test message")
 	output := buf.String()
-	if !strings.Contains(output, "DEBUG") {
-		t.Errorf("Msg() output does not contain level: %s", output)
-	}
-	if !strings.Contains(output, "test message") {
-		t.Errorf("Msg() output does not contain message: %s", output)
-	}
+	assert.Contains(t, output, "DEBUG", "Msg() output should contain level")
+	assert.Contains(t, output, "test message", "Msg() output should contain message")
 
 	// Test Msgf method
 	buf.Reset()
 	logger.Info().Msgf("formatted %s %d", "message", 42)
 	output = buf.String()
-	if !strings.Contains(output, "INFO") {
-		t.Errorf("Msgf() output does not contain level: %s", output)
-	}
-	if !strings.Contains(output, "formatted message 42") {
-		t.Errorf("Msgf() output does not contain formatted message: %s", output)
-	}
+	assert.Contains(t, output, "INFO", "Msgf() output should contain level")
+	assert.Contains(t, output, "formatted message 42", "Msgf() output should contain formatted message")
 
-	// Test nil event handling
+	// Test nil event handling - we're just making sure it doesn't panic
 	var nilEvent *Event
-	nilEvent.Msg("should not panic")
-	nilEvent.Msgf("should not %s", "panic")
-	nilEvent.Err(testErr)
+	assert.NotPanics(t, func() {
+		nilEvent.Msg("should not panic")
+		nilEvent.Msgf("should not %s", "panic")
+		nilEvent.Err(testErr)
+	}, "Nil events should not panic")
 }
 
 // TestDefaultLogger tests the default logger functions
@@ -175,37 +138,32 @@ func TestDefaultLogger(t *testing.T) {
 	// Test Debug
 	buf.Reset()
 	Debug().Msg("debug message")
-	if !strings.Contains(buf.String(), "DEBUG") || !strings.Contains(buf.String(), "debug message") {
-		t.Errorf("Debug() output incorrect: %s", buf.String())
-	}
+	assert.Contains(t, buf.String(), "DEBUG", "Debug() output should contain level")
+	assert.Contains(t, buf.String(), "debug message", "Debug() output should contain message")
 
 	// Test Info
 	buf.Reset()
 	Info().Msg("info message")
-	if !strings.Contains(buf.String(), "INFO") || !strings.Contains(buf.String(), "info message") {
-		t.Errorf("Info() output incorrect: %s", buf.String())
-	}
+	assert.Contains(t, buf.String(), "INFO", "Info() output should contain level")
+	assert.Contains(t, buf.String(), "info message", "Info() output should contain message")
 
 	// Test Warn
 	buf.Reset()
 	Warn().Msg("warn message")
-	if !strings.Contains(buf.String(), "WARN") || !strings.Contains(buf.String(), "warn message") {
-		t.Errorf("Warn() output incorrect: %s", buf.String())
-	}
+	assert.Contains(t, buf.String(), "WARN", "Warn() output should contain level")
+	assert.Contains(t, buf.String(), "warn message", "Warn() output should contain message")
 
 	// Test Error
 	buf.Reset()
 	Error().Msg("error message")
-	if !strings.Contains(buf.String(), "ERROR") || !strings.Contains(buf.String(), "error message") {
-		t.Errorf("Error() output incorrect: %s", buf.String())
-	}
+	assert.Contains(t, buf.String(), "ERROR", "Error() output should contain level")
+	assert.Contains(t, buf.String(), "error message", "Error() output should contain message")
 
 	// Test Fatal
 	buf.Reset()
 	Fatal().Msg("fatal message")
-	if !strings.Contains(buf.String(), "FATAL") || !strings.Contains(buf.String(), "fatal message") {
-		t.Errorf("Fatal() output incorrect: %s", buf.String())
-	}
+	assert.Contains(t, buf.String(), "FATAL", "Fatal() output should contain level")
+	assert.Contains(t, buf.String(), "fatal message", "Fatal() output should contain message")
 
 	// Test level filtering
 	SetLevel(ErrorLevel)
@@ -213,14 +171,10 @@ func TestDefaultLogger(t *testing.T) {
 	Debug().Msg("should not appear")
 	Info().Msg("should not appear")
 	Warn().Msg("should not appear")
-	if buf.Len() > 0 {
-		t.Errorf("Messages below ErrorLevel should be filtered out, but got: %s", buf.String())
-	}
+	assert.Empty(t, buf.String(), "Messages below ErrorLevel should be filtered out")
 
 	Error().Msg("should appear")
-	if !strings.Contains(buf.String(), "should appear") {
-		t.Errorf("Error message should appear when level is ErrorLevel, but got: %s", buf.String())
-	}
+	assert.Contains(t, buf.String(), "should appear", "Error message should appear when level is ErrorLevel")
 }
 
 // TestAppendInt tests the appendInt function
@@ -239,8 +193,6 @@ func TestAppendInt(t *testing.T) {
 	for _, test := range tests {
 		buf := make([]byte, 0, 32)
 		buf = appendInt(buf, test.n)
-		if got := string(buf); got != test.expected {
-			t.Errorf("appendInt(%d) = %s, expected %s", test.n, got, test.expected)
-		}
+		assert.Equal(t, test.expected, string(buf), "appendInt(%d) should produce correct string", test.n)
 	}
 }

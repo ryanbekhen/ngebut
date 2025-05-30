@@ -2,6 +2,8 @@ package ngebut
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestRouterGroup tests the Group method of Router
@@ -9,21 +11,10 @@ func TestRouterGroup(t *testing.T) {
 	router := NewRouter()
 	group := router.Group("/api")
 
-	if group == nil {
-		t.Fatal("Router.Group() returned nil")
-	}
-
-	if group.prefix != "/api" {
-		t.Errorf("group.prefix = %q, want %q", group.prefix, "/api")
-	}
-
-	if group.router != router {
-		t.Error("group.router is not the same as the router")
-	}
-
-	if len(group.middlewareFuncs) != 0 {
-		t.Errorf("len(group.middlewareFuncs) = %d, want 0", len(group.middlewareFuncs))
-	}
+	assert.NotNil(t, group, "Router.Group() returned nil")
+	assert.Equal(t, "/api", group.prefix, "group.prefix doesn't match expected value")
+	assert.Same(t, router, group.router, "group.router is not the same as the router")
+	assert.Empty(t, group.middlewareFuncs, "group.middlewareFuncs should be empty")
 }
 
 // TestGroupUse tests the Use method of Group
@@ -37,13 +28,8 @@ func TestGroupUse(t *testing.T) {
 	}
 
 	result := group.Use(middleware1)
-	if result != group {
-		t.Error("Group.Use() did not return the group")
-	}
-
-	if len(group.middlewareFuncs) != 1 {
-		t.Errorf("len(group.middlewareFuncs) = %d, want 1", len(group.middlewareFuncs))
-	}
+	assert.Same(t, group, result, "Group.Use() did not return the group")
+	assert.Len(t, group.middlewareFuncs, 1, "group.middlewareFuncs should have length 1")
 
 	// Test with multiple middleware functions
 	middleware2 := func(c *Ctx) {
@@ -51,17 +37,12 @@ func TestGroupUse(t *testing.T) {
 	}
 
 	group.Use(middleware2)
-	if len(group.middlewareFuncs) != 2 {
-		t.Errorf("len(group.middlewareFuncs) = %d, want 2", len(group.middlewareFuncs))
-	}
+	assert.Len(t, group.middlewareFuncs, 2, "group.middlewareFuncs should have length 2")
 
 	// Test with invalid middleware (should panic)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Group.Use() with invalid middleware did not panic")
-		}
-	}()
-	group.Use("not a middleware")
+	assert.Panics(t, func() {
+		group.Use("not a middleware")
+	}, "Group.Use() with invalid middleware should panic")
 }
 
 // TestGroupHandle tests the Handle method of Group
@@ -75,73 +56,43 @@ func TestGroupHandle(t *testing.T) {
 	}
 
 	result := group.Handle("", "GET", handler)
-	if result != group {
-		t.Error("Group.Handle() did not return the group")
-	}
+	assert.Same(t, group, result, "Group.Handle() did not return the group")
 
 	// Check that the route was added to the router
-	if len(router.Routes) != 1 {
-		t.Errorf("len(router.Routes) = %d, want 1", len(router.Routes))
-	}
+	assert.Len(t, router.Routes, 1, "router.Routes should have length 1")
 
 	route := router.Routes[0]
-	if route.Pattern != "/api" {
-		t.Errorf("route.Pattern = %q, want %q", route.Pattern, "/api")
-	}
-	if route.Method != "GET" {
-		t.Errorf("route.Method = %q, want %q", route.Method, "GET")
-	}
-	if len(route.Handlers) != 1 {
-		t.Errorf("len(route.Handlers) = %d, want 1", len(route.Handlers))
-	}
+	assert.Equal(t, "/api", route.Pattern, "route.Pattern doesn't match expected value")
+	assert.Equal(t, "GET", route.Method, "route.Method doesn't match expected value")
+	assert.Len(t, route.Handlers, 1, "route.Handlers should have length 1")
 
 	// Test with pattern that starts with /
 	group.Handle("/users", "POST", handler)
-	if len(router.Routes) != 2 {
-		t.Errorf("len(router.Routes) = %d, want 2", len(router.Routes))
-	}
+	assert.Len(t, router.Routes, 2, "router.Routes should have length 2")
 
 	route = router.Routes[1]
-	if route.Pattern != "/api/users" {
-		t.Errorf("route.Pattern = %q, want %q", route.Pattern, "/api/users")
-	}
-	if route.Method != "POST" {
-		t.Errorf("route.Method = %q, want %q", route.Method, "POST")
-	}
+	assert.Equal(t, "/api/users", route.Pattern, "route.Pattern doesn't match expected value")
+	assert.Equal(t, "POST", route.Method, "route.Method doesn't match expected value")
 
 	// Test with pattern that doesn't start with /
 	group.Handle("items", "PUT", handler)
-	if len(router.Routes) != 3 {
-		t.Errorf("len(router.Routes) = %d, want 3", len(router.Routes))
-	}
+	assert.Len(t, router.Routes, 3, "router.Routes should have length 3")
 
 	route = router.Routes[2]
-	if route.Pattern != "/api/items" {
-		t.Errorf("route.Pattern = %q, want %q", route.Pattern, "/api/items")
-	}
-	if route.Method != "PUT" {
-		t.Errorf("route.Method = %q, want %q", route.Method, "PUT")
-	}
+	assert.Equal(t, "/api/items", route.Pattern, "route.Pattern doesn't match expected value")
+	assert.Equal(t, "PUT", route.Method, "route.Method doesn't match expected value")
 
 	// Test with multiple handlers
 	handler2 := func(c *Ctx) {
 		// Another handler
 	}
 	group.Handle("/multi", "DELETE", handler, handler2)
-	if len(router.Routes) != 4 {
-		t.Errorf("len(router.Routes) = %d, want 4", len(router.Routes))
-	}
+	assert.Len(t, router.Routes, 4, "router.Routes should have length 4")
 
 	route = router.Routes[3]
-	if route.Pattern != "/api/multi" {
-		t.Errorf("route.Pattern = %q, want %q", route.Pattern, "/api/multi")
-	}
-	if route.Method != "DELETE" {
-		t.Errorf("route.Method = %q, want %q", route.Method, "DELETE")
-	}
-	if len(route.Handlers) != 2 {
-		t.Errorf("len(route.Handlers) = %d, want 2", len(route.Handlers))
-	}
+	assert.Equal(t, "/api/multi", route.Pattern, "route.Pattern doesn't match expected value")
+	assert.Equal(t, "DELETE", route.Method, "route.Method doesn't match expected value")
+	assert.Len(t, route.Handlers, 2, "route.Handlers should have length 2")
 }
 
 // TestGroupHTTPMethods tests the HTTP method registration methods of Group
@@ -152,63 +103,41 @@ func TestGroupHTTPMethods(t *testing.T) {
 
 	// Test GET
 	result := group.GET("/users", handler)
-	if result != group {
-		t.Error("Group.GET() did not return the group")
-	}
-	if len(router.Routes) != 1 {
-		t.Errorf("len(router.Routes) = %d, want 1", len(router.Routes))
-	}
-	if router.Routes[0].Method != "GET" {
-		t.Errorf("router.Routes[0].Method = %q, want %q", router.Routes[0].Method, "GET")
-	}
+	assert.Same(t, group, result, "Group.GET() did not return the group")
+	assert.Len(t, router.Routes, 1, "router.Routes should have length 1")
+	assert.Equal(t, "GET", router.Routes[0].Method, "router.Routes[0].Method doesn't match expected value")
 
 	// Test HEAD
 	group.HEAD("/users", handler)
-	if router.Routes[1].Method != "HEAD" {
-		t.Errorf("router.Routes[1].Method = %q, want %q", router.Routes[1].Method, "HEAD")
-	}
+	assert.Equal(t, "HEAD", router.Routes[1].Method, "router.Routes[1].Method doesn't match expected value")
 
 	// Test POST
 	group.POST("/users", handler)
-	if router.Routes[2].Method != "POST" {
-		t.Errorf("router.Routes[2].Method = %q, want %q", router.Routes[2].Method, "POST")
-	}
+	assert.Equal(t, "POST", router.Routes[2].Method, "router.Routes[2].Method doesn't match expected value")
 
 	// Test PUT
 	group.PUT("/users", handler)
-	if router.Routes[3].Method != "PUT" {
-		t.Errorf("router.Routes[3].Method = %q, want %q", router.Routes[3].Method, "PUT")
-	}
+	assert.Equal(t, "PUT", router.Routes[3].Method, "router.Routes[3].Method doesn't match expected value")
 
 	// Test DELETE
 	group.DELETE("/users", handler)
-	if router.Routes[4].Method != "DELETE" {
-		t.Errorf("router.Routes[4].Method = %q, want %q", router.Routes[4].Method, "DELETE")
-	}
+	assert.Equal(t, "DELETE", router.Routes[4].Method, "router.Routes[4].Method doesn't match expected value")
 
 	// Test CONNECT
 	group.CONNECT("/users", handler)
-	if router.Routes[5].Method != "CONNECT" {
-		t.Errorf("router.Routes[5].Method = %q, want %q", router.Routes[5].Method, "CONNECT")
-	}
+	assert.Equal(t, "CONNECT", router.Routes[5].Method, "router.Routes[5].Method doesn't match expected value")
 
 	// Test OPTIONS
 	group.OPTIONS("/users", handler)
-	if router.Routes[6].Method != "OPTIONS" {
-		t.Errorf("router.Routes[6].Method = %q, want %q", router.Routes[6].Method, "OPTIONS")
-	}
+	assert.Equal(t, "OPTIONS", router.Routes[6].Method, "router.Routes[6].Method doesn't match expected value")
 
 	// Test TRACE
 	group.TRACE("/users", handler)
-	if router.Routes[7].Method != "TRACE" {
-		t.Errorf("router.Routes[7].Method = %q, want %q", router.Routes[7].Method, "TRACE")
-	}
+	assert.Equal(t, "TRACE", router.Routes[7].Method, "router.Routes[7].Method doesn't match expected value")
 
 	// Test PATCH
 	group.PATCH("/users", handler)
-	if router.Routes[8].Method != "PATCH" {
-		t.Errorf("router.Routes[8].Method = %q, want %q", router.Routes[8].Method, "PATCH")
-	}
+	assert.Equal(t, "PATCH", router.Routes[8].Method, "router.Routes[8].Method doesn't match expected value")
 }
 
 // TestGroupSubGroup tests the Group method of Group
@@ -224,43 +153,24 @@ func TestGroupSubGroup(t *testing.T) {
 
 	// Create a sub-group
 	subGroup := group.Group("/v1")
-	if subGroup == nil {
-		t.Fatal("Group.Group() returned nil")
-	}
-
-	if subGroup.prefix != "/api/v1" {
-		t.Errorf("subGroup.prefix = %q, want %q", subGroup.prefix, "/api/v1")
-	}
-
-	if subGroup.router != router {
-		t.Error("subGroup.router is not the same as the router")
-	}
-
-	if len(subGroup.middlewareFuncs) != 1 {
-		t.Errorf("len(subGroup.middlewareFuncs) = %d, want 1", len(subGroup.middlewareFuncs))
-	}
+	assert.NotNil(t, subGroup, "Group.Group() returned nil")
+	assert.Equal(t, "/api/v1", subGroup.prefix, "subGroup.prefix doesn't match expected value")
+	assert.Same(t, router, subGroup.router, "subGroup.router is not the same as the router")
+	assert.Len(t, subGroup.middlewareFuncs, 1, "subGroup.middlewareFuncs should have length 1")
 
 	// Test with empty prefix
 	subGroup2 := group.Group("")
-	if subGroup2.prefix != "/api" {
-		t.Errorf("subGroup2.prefix = %q, want %q", subGroup2.prefix, "/api")
-	}
+	assert.Equal(t, "/api", subGroup2.prefix, "subGroup2.prefix doesn't match expected value")
 
 	// Test with prefix that starts with /
 	subGroup3 := group.Group("/v2")
-	if subGroup3.prefix != "/api/v2" {
-		t.Errorf("subGroup3.prefix = %q, want %q", subGroup3.prefix, "/api/v2")
-	}
+	assert.Equal(t, "/api/v2", subGroup3.prefix, "subGroup3.prefix doesn't match expected value")
 
 	// Test with prefix that doesn't start with /
 	subGroup4 := group.Group("v3")
-	if subGroup4.prefix != "/api/v3" {
-		t.Errorf("subGroup4.prefix = %q, want %q", subGroup4.prefix, "/api/v3")
-	}
+	assert.Equal(t, "/api/v3", subGroup4.prefix, "subGroup4.prefix doesn't match expected value")
 
 	// Test nested sub-groups
 	nestedGroup := subGroup.Group("/users")
-	if nestedGroup.prefix != "/api/v1/users" {
-		t.Errorf("nestedGroup.prefix = %q, want %q", nestedGroup.prefix, "/api/v1/users")
-	}
+	assert.Equal(t, "/api/v1/users", nestedGroup.prefix, "nestedGroup.prefix doesn't match expected value")
 }

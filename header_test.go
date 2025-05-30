@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestHeaderAdd tests the Add method of Header
@@ -12,30 +14,22 @@ func TestHeaderAdd(t *testing.T) {
 
 	// Test adding a single value
 	h.Add("Content-Type", "application/json")
-	if got := h.Get("Content-Type"); got != "application/json" {
-		t.Errorf("h.Get(\"Content-Type\") = %q, want %q", got, "application/json")
-	}
+	require.Equal(t, "application/json", h.Get("Content-Type"))
 
 	// Test adding multiple values for the same key
 	h.Add("Accept", "text/html")
 	h.Add("Accept", "application/json")
 	values := h.Values("Accept")
-	if len(values) != 2 {
-		t.Errorf("len(h.Values(\"Accept\")) = %d, want 2", len(values))
-	}
-	if values[0] != "text/html" || values[1] != "application/json" {
-		t.Errorf("h.Values(\"Accept\") = %v, want [\"text/html\", \"application/json\"]", values)
-	}
+	require.Len(t, values, 2)
+	require.Equal(t, "text/html", values[0])
+	require.Equal(t, "application/json", values[1])
 
 	// Test case insensitivity
 	h.Add("content-type", "text/html")
 	values = h.Values("Content-Type")
-	if len(values) != 2 {
-		t.Errorf("len(h.Values(\"Content-Type\")) = %d, want 2", len(values))
-	}
-	if values[0] != "application/json" || values[1] != "text/html" {
-		t.Errorf("h.Values(\"Content-Type\") = %v, want [\"application/json\", \"text/html\"]", values)
-	}
+	require.Len(t, values, 2)
+	require.Equal(t, "application/json", values[0])
+	require.Equal(t, "text/html", values[1])
 }
 
 // TestHeaderSet tests the Set method of Header
@@ -44,21 +38,15 @@ func TestHeaderSet(t *testing.T) {
 
 	// Test setting a value
 	h.Set("Content-Type", "application/json")
-	if got := h.Get("Content-Type"); got != "application/json" {
-		t.Errorf("h.Get(\"Content-Type\") = %q, want %q", got, "application/json")
-	}
+	require.Equal(t, "application/json", h.Get("Content-Type"))
 
 	// Test overwriting a value
 	h.Set("Content-Type", "text/html")
-	if got := h.Get("Content-Type"); got != "text/html" {
-		t.Errorf("h.Get(\"Content-Type\") = %q, want %q", got, "text/html")
-	}
+	require.Equal(t, "text/html", h.Get("Content-Type"))
 
 	// Test case insensitivity
 	h.Set("content-type", "application/xml")
-	if got := h.Get("Content-Type"); got != "application/xml" {
-		t.Errorf("h.Get(\"Content-Type\") = %q, want %q", got, "application/xml")
-	}
+	require.Equal(t, "application/xml", h.Get("Content-Type"))
 }
 
 // TestHeaderGet tests the Get method of Header
@@ -66,20 +54,14 @@ func TestHeaderGet(t *testing.T) {
 	h := make(Header)
 
 	// Test getting a non-existent key
-	if got := h.Get("Content-Type"); got != "" {
-		t.Errorf("h.Get(\"Content-Type\") = %q, want \"\"", got)
-	}
+	require.Empty(t, h.Get("Content-Type"))
 
 	// Test getting an existing key
 	h.Set("Content-Type", "application/json")
-	if got := h.Get("Content-Type"); got != "application/json" {
-		t.Errorf("h.Get(\"Content-Type\") = %q, want %q", got, "application/json")
-	}
+	require.Equal(t, "application/json", h.Get("Content-Type"))
 
 	// Test case insensitivity
-	if got := h.Get("content-type"); got != "application/json" {
-		t.Errorf("h.Get(\"content-type\") = %q, want %q", got, "application/json")
-	}
+	require.Equal(t, "application/json", h.Get("content-type"))
 }
 
 // TestHeaderValues tests the Values method of Header
@@ -88,30 +70,27 @@ func TestHeaderValues(t *testing.T) {
 
 	// Test getting values for a non-existent key
 	values := h.Values("Accept")
-	if len(values) != 0 {
-		t.Errorf("len(h.Values(\"Accept\")) = %d, want 0", len(values))
-	}
+	require.Empty(t, values)
 
 	// Test getting values for a key with a single value
 	h.Set("Content-Type", "application/json")
 	values = h.Values("Content-Type")
-	if len(values) != 1 || values[0] != "application/json" {
-		t.Errorf("h.Values(\"Content-Type\") = %v, want [\"application/json\"]", values)
-	}
+	require.Len(t, values, 1)
+	require.Equal(t, "application/json", values[0])
 
 	// Test getting values for a key with multiple values
 	h.Add("Accept", "text/html")
 	h.Add("Accept", "application/json")
 	values = h.Values("Accept")
-	if len(values) != 2 || values[0] != "text/html" || values[1] != "application/json" {
-		t.Errorf("h.Values(\"Accept\") = %v, want [\"text/html\", \"application/json\"]", values)
-	}
+	require.Len(t, values, 2)
+	require.Equal(t, "text/html", values[0])
+	require.Equal(t, "application/json", values[1])
 
 	// Test case insensitivity
 	values = h.Values("accept")
-	if len(values) != 2 || values[0] != "text/html" || values[1] != "application/json" {
-		t.Errorf("h.Values(\"accept\") = %v, want [\"text/html\", \"application/json\"]", values)
-	}
+	require.Len(t, values, 2)
+	require.Equal(t, "text/html", values[0])
+	require.Equal(t, "application/json", values[1])
 }
 
 // TestHeaderDel tests the Del method of Header
@@ -123,18 +102,16 @@ func TestHeaderDel(t *testing.T) {
 
 	// Test deleting a key
 	h.Del("Content-Type")
-	if got := h.Get("Content-Type"); got != "" {
-		t.Errorf("h.Get(\"Content-Type\") = %q, want \"\"", got)
-	}
+	require.Empty(t, h.Get("Content-Type"))
 
 	// Test case insensitivity
 	h.Del("accept")
-	if got := h.Get("Accept"); got != "" {
-		t.Errorf("h.Get(\"Accept\") = %q, want \"\"", got)
-	}
+	require.Empty(t, h.Get("Accept"))
 
 	// Test deleting a non-existent key (should not panic)
-	h.Del("X-Custom-Header")
+	require.NotPanics(t, func() {
+		h.Del("X-Custom-Header")
+	})
 }
 
 // TestHeaderClone tests the Clone method of Header
@@ -142,16 +119,12 @@ func TestHeaderClone(t *testing.T) {
 	// Test cloning nil header
 	var h Header
 	clone := h.Clone()
-	if clone != nil {
-		t.Errorf("nil.Clone() = %v, want nil", clone)
-	}
+	require.Nil(t, clone)
 
 	// Test cloning empty header
 	h = make(Header)
 	clone = h.Clone()
-	if len(clone) != 0 {
-		t.Errorf("len(empty.Clone()) = %d, want 0", len(clone))
-	}
+	require.Empty(t, clone)
 
 	// Test cloning header with values
 	h.Set("Content-Type", "application/json")
@@ -161,26 +134,20 @@ func TestHeaderClone(t *testing.T) {
 	clone = h.Clone()
 
 	// Check if clone has the same values
-	if got := clone.Get("Content-Type"); got != "application/json" {
-		t.Errorf("clone.Get(\"Content-Type\") = %q, want %q", got, "application/json")
-	}
+	require.Equal(t, "application/json", clone.Get("Content-Type"))
 
 	values := clone.Values("Accept")
-	if len(values) != 2 || values[0] != "text/html" || values[1] != "application/json" {
-		t.Errorf("clone.Values(\"Accept\") = %v, want [\"text/html\", \"application/json\"]", values)
-	}
+	require.Len(t, values, 2)
+	require.Equal(t, "text/html", values[0])
+	require.Equal(t, "application/json", values[1])
 
 	// Modify original and check if clone is affected
 	h.Set("Content-Type", "text/html")
-	if got := clone.Get("Content-Type"); got != "application/json" {
-		t.Errorf("clone.Get(\"Content-Type\") = %q, want %q", got, "application/json")
-	}
+	require.Equal(t, "application/json", clone.Get("Content-Type"))
 
 	// Modify clone and check if original is affected
 	clone.Set("Content-Type", "application/xml")
-	if got := h.Get("Content-Type"); got != "text/html" {
-		t.Errorf("h.Get(\"Content-Type\") = %q, want %q", got, "text/html")
-	}
+	require.Equal(t, "text/html", h.Get("Content-Type"))
 }
 
 // TestHeaderWrite tests the Write method of Header
@@ -192,19 +159,14 @@ func TestHeaderWrite(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := h.Write(&buf)
-	if err != nil {
-		t.Fatalf("h.Write() returned error: %v", err)
-	}
-
-	expected := "Content-Type: application/json\r\nAccept: text/html\r\nAccept: application/json\r\n"
-	// Since map iteration order is not guaranteed, we need to check for both possible orders
-	alt1 := "Accept: text/html\r\nAccept: application/json\r\nContent-Type: application/json\r\n"
-	alt2 := "Accept: application/json\r\nAccept: text/html\r\nContent-Type: application/json\r\n"
+	require.NoError(t, err)
 
 	got := buf.String()
-	if got != expected && got != alt1 && got != alt2 {
-		t.Errorf("h.Write() produced %q, want one of:\n%q\n%q\n%q", got, expected, alt1, alt2)
-	}
+
+	// Since map iteration order is not guaranteed, we check for individual headers
+	require.Contains(t, got, "Content-Type: application/json\r\n")
+	require.Contains(t, got, "Accept: text/html\r\n")
+	require.Contains(t, got, "Accept: application/json\r\n")
 }
 
 // TestHeaderWriteSubset tests the WriteSubset method of Header
@@ -223,39 +185,29 @@ func TestHeaderWriteSubset(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := h.WriteSubset(&buf, exclude)
-	if err != nil {
-		t.Fatalf("h.WriteSubset() returned error: %v", err)
-	}
-
-	expected := "Accept: text/html\r\nAccept: application/json\r\n"
-	alt := "Accept: application/json\r\nAccept: text/html\r\n"
+	require.NoError(t, err)
 
 	got := buf.String()
-	if got != expected && got != alt {
-		t.Errorf("h.WriteSubset() produced %q, want either %q or %q", got, expected, alt)
-	}
+
+	// Check that excluded headers are not present
+	require.NotContains(t, got, "Content-Type")
+	require.NotContains(t, got, "X-Custom-Header")
+
+	// Check that non-excluded headers are present
+	require.Contains(t, got, "Accept: text/html\r\n")
+	require.Contains(t, got, "Accept: application/json\r\n")
 
 	// Test with nil exclude
 	buf.Reset()
 	err = h.WriteSubset(&buf, nil)
-	if err != nil {
-		t.Fatalf("h.WriteSubset(nil) returned error: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Check that the output contains all headers
 	got = buf.String()
-	if !strings.Contains(got, "Content-Type: application/json\r\n") {
-		t.Errorf("h.WriteSubset(nil) output doesn't contain Content-Type header")
-	}
-	if !strings.Contains(got, "X-Custom-Header: custom value\r\n") {
-		t.Errorf("h.WriteSubset(nil) output doesn't contain X-Custom-Header header")
-	}
-	if !strings.Contains(got, "Accept: text/html\r\n") {
-		t.Errorf("h.WriteSubset(nil) output doesn't contain Accept: text/html header")
-	}
-	if !strings.Contains(got, "Accept: application/json\r\n") {
-		t.Errorf("h.WriteSubset(nil) output doesn't contain Accept: application/json header")
-	}
+	require.Contains(t, got, "Content-Type: application/json\r\n")
+	require.Contains(t, got, "X-Custom-Header: custom value\r\n")
+	require.Contains(t, got, "Accept: text/html\r\n")
+	require.Contains(t, got, "Accept: application/json\r\n")
 }
 
 // TestHeaderSanitization tests that headers are properly sanitized
@@ -266,29 +218,22 @@ func TestHeaderSanitization(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := h.Write(&buf)
-	if err != nil {
-		t.Fatalf("h.Write() returned error: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Check that newlines and carriage returns in values are replaced with spaces
 	got := buf.String()
 
 	// The header value should have spaces instead of newlines and carriage returns
-	if strings.Contains(got, "Content-Type: application/json  X-Injected: value") {
-		// This is expected behavior - the \r\n in the middle of the value is replaced with spaces
-		// but it doesn't prevent the value from being written
-	} else {
-		t.Errorf("h.Write() didn't properly replace newlines with spaces in Content-Type header: %q", got)
+	if strings.Contains(got, "application/json") {
+		// Check that CR/LF are replaced with spaces
+		require.Contains(t, got, "application/json  X-Injected: value")
 	}
 
-	if strings.Contains(got, "X-Header: value with   newline and   carriage return") {
-		// This is expected behavior - \n and \r are replaced with spaces
-	} else {
-		t.Errorf("h.Write() didn't properly replace newlines with spaces in X-Header header: %q", got)
+	if strings.Contains(got, "X-Header") {
+		// Check that \n and \r are replaced with spaces
+		require.Contains(t, got, "value with   newline and   carriage return")
 	}
 
 	// The CRLF at the end of each header line should still be there
-	if !strings.Contains(got, "\r\n") {
-		t.Errorf("h.Write() didn't include CRLF line endings: %q", got)
-	}
+	require.Contains(t, got, "\r\n")
 }

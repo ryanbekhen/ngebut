@@ -2,6 +2,7 @@ package log
 
 import (
 	"errors"
+	"github.com/stretchr/testify/assert"
 	"testing"
 )
 
@@ -97,20 +98,14 @@ func TestGlobalLogger(t *testing.T) {
 	// Test GetLogger with no logger set
 	globalLogger = nil
 	logger := GetLogger()
-	if logger == nil {
-		t.Error("GetLogger() returned nil when no logger was set")
-	}
-	if logger != defaultLogger {
-		t.Error("GetLogger() did not return the default logger when no logger was set")
-	}
+	assert.NotNil(t, logger, "GetLogger() returned nil when no logger was set")
+	assert.Equal(t, defaultLogger, logger, "GetLogger() did not return the default logger when no logger was set")
 
 	// Test SetLogger and GetLogger
 	mockLogger := &MockLogger{}
 	SetLogger(mockLogger)
 	logger = GetLogger()
-	if logger != mockLogger {
-		t.Error("GetLogger() did not return the logger set with SetLogger()")
-	}
+	assert.Equal(t, mockLogger, logger, "GetLogger() did not return the logger set with SetLogger()")
 }
 
 // TestAdapterEvent tests the AdapterEvent type
@@ -121,33 +116,21 @@ func TestAdapterEvent(t *testing.T) {
 	// Test Err
 	testErr := errors.New("test error")
 	adapterEvent.Err(testErr)
-	if !mockEvent.errCalled {
-		t.Error("AdapterEvent.Err() did not call the underlying event's Err method")
-	}
-	if mockEvent.err != testErr {
-		t.Errorf("AdapterEvent.Err() passed %v to the underlying event, expected %v", mockEvent.err, testErr)
-	}
+	assert.True(t, mockEvent.errCalled, "AdapterEvent.Err() did not call the underlying event's Err method")
+	assert.Equal(t, testErr, mockEvent.err, "AdapterEvent.Err() passed incorrect error to the underlying event")
 
 	// Test Msg
 	adapterEvent.Msg("test message")
-	if !mockEvent.msgCalled {
-		t.Error("AdapterEvent.Msg() did not call the underlying event's Msg method")
-	}
-	if mockEvent.msg != "test message" {
-		t.Errorf("AdapterEvent.Msg() passed %s to the underlying event, expected 'test message'", mockEvent.msg)
-	}
+	assert.True(t, mockEvent.msgCalled, "AdapterEvent.Msg() did not call the underlying event's Msg method")
+	assert.Equal(t, "test message", mockEvent.msg, "AdapterEvent.Msg() passed incorrect message to the underlying event")
 
 	// Test Msgf
 	adapterEvent.Msgf("test %s %d", "format", 42)
-	if !mockEvent.msgfCalled {
-		t.Error("AdapterEvent.Msgf() did not call the underlying event's Msgf method")
-	}
-	if mockEvent.format != "test %s %d" {
-		t.Errorf("AdapterEvent.Msgf() passed format %s to the underlying event, expected 'test %%s %%d'", mockEvent.format)
-	}
-	if len(mockEvent.args) != 2 || mockEvent.args[0] != "format" || mockEvent.args[1] != 42 {
-		t.Errorf("AdapterEvent.Msgf() passed args %v to the underlying event, expected ['format', 42]", mockEvent.args)
-	}
+	assert.True(t, mockEvent.msgfCalled, "AdapterEvent.Msgf() did not call the underlying event's Msgf method")
+	assert.Equal(t, "test %s %d", mockEvent.format, "AdapterEvent.Msgf() passed incorrect format to the underlying event")
+	assert.Len(t, mockEvent.args, 2, "AdapterEvent.Msgf() passed incorrect number of arguments")
+	assert.Equal(t, "format", mockEvent.args[0], "AdapterEvent.Msgf() passed incorrect first argument")
+	assert.Equal(t, 42, mockEvent.args[1], "AdapterEvent.Msgf() passed incorrect second argument")
 }
 
 // TestAdapterLogger tests the AdapterLogger type
@@ -157,62 +140,40 @@ func TestAdapterLogger(t *testing.T) {
 
 	// Test Debug
 	adapterLogger.Debug()
-	if !mockLogger.debugCalled {
-		t.Error("AdapterLogger.Debug() did not call the underlying logger's Debug method")
-	}
+	assert.True(t, mockLogger.debugCalled, "AdapterLogger.Debug() did not call the underlying logger's Debug method")
 
 	// Test Info
 	adapterLogger.Info()
-	if !mockLogger.infoCalled {
-		t.Error("AdapterLogger.Info() did not call the underlying logger's Info method")
-	}
+	assert.True(t, mockLogger.infoCalled, "AdapterLogger.Info() did not call the underlying logger's Info method")
 
 	// Test Warn
 	adapterLogger.Warn()
-	if !mockLogger.warnCalled {
-		t.Error("AdapterLogger.Warn() did not call the underlying logger's Warn method")
-	}
+	assert.True(t, mockLogger.warnCalled, "AdapterLogger.Warn() did not call the underlying logger's Warn method")
 
 	// Test Error
 	adapterLogger.Error()
-	if !mockLogger.errorCalled {
-		t.Error("AdapterLogger.Error() did not call the underlying logger's Error method")
-	}
+	assert.True(t, mockLogger.errorCalled, "AdapterLogger.Error() did not call the underlying logger's Error method")
 
 	// Test Fatal
 	adapterLogger.Fatal()
-	if !mockLogger.fatalCalled {
-		t.Error("AdapterLogger.Fatal() did not call the underlying logger's Fatal method")
-	}
+	assert.True(t, mockLogger.fatalCalled, "AdapterLogger.Fatal() did not call the underlying logger's Fatal method")
 
 	// Test SetLevel
 	adapterLogger.SetLevel(WarnLevel)
-	if !mockLogger.setLevelCalled {
-		t.Error("AdapterLogger.SetLevel() did not call the underlying logger's SetLevel method")
-	}
-	if mockLogger.level != WarnLevel {
-		t.Errorf("AdapterLogger.SetLevel() passed %v to the underlying logger, expected %v", mockLogger.level, WarnLevel)
-	}
+	assert.True(t, mockLogger.setLevelCalled, "AdapterLogger.SetLevel() did not call the underlying logger's SetLevel method")
+	assert.Equal(t, WarnLevel, mockLogger.level, "AdapterLogger.SetLevel() passed incorrect level to the underlying logger")
 
 	// Test GetLevel
 	mockLogger.level = ErrorLevel
 	level := adapterLogger.GetLevel()
-	if !mockLogger.getLevelCalled {
-		t.Error("AdapterLogger.GetLevel() did not call the underlying logger's GetLevel method")
-	}
-	if level != ErrorLevel {
-		t.Errorf("AdapterLogger.GetLevel() returned %v, expected %v", level, ErrorLevel)
-	}
+	assert.True(t, mockLogger.getLevelCalled, "AdapterLogger.GetLevel() did not call the underlying logger's GetLevel method")
+	assert.Equal(t, ErrorLevel, level, "AdapterLogger.GetLevel() returned incorrect level")
 }
 
 // TestNewAdapterLogger tests the NewAdapterLogger function
 func TestNewAdapterLogger(t *testing.T) {
 	mockLogger := &MockLogger{}
 	adapterLogger := NewAdapterLogger(mockLogger)
-	if adapterLogger == nil {
-		t.Error("NewAdapterLogger() returned nil")
-	}
-	if adapterLogger.logger != mockLogger {
-		t.Error("NewAdapterLogger() did not set the logger field correctly")
-	}
+	assert.NotNil(t, adapterLogger, "NewAdapterLogger() returned nil")
+	assert.Equal(t, mockLogger, adapterLogger.logger, "NewAdapterLogger() did not set the logger field correctly")
 }

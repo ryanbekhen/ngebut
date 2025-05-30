@@ -5,23 +5,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestNew tests the New function
 func TestNew(t *testing.T) {
 	// Test with default config
 	server := New(DefaultConfig())
-	if server == nil {
-		t.Fatal("New() returned nil")
-	}
-
-	if server.router == nil {
-		t.Error("server.router is nil")
-	}
-
-	if server.httpServer == nil {
-		t.Error("server.httpServer is nil")
-	}
+	require.NotNil(t, server, "New() returned nil")
+	assert.NotNil(t, server.router, "server.router is nil")
+	assert.NotNil(t, server.httpServer, "server.httpServer is nil")
 
 	// Test with custom config
 	customConfig := Config{
@@ -32,17 +27,9 @@ func TestNew(t *testing.T) {
 	}
 
 	server = New(customConfig)
-	if server == nil {
-		t.Fatal("New() with custom config returned nil")
-	}
-
-	if !server.disableStartupMessage {
-		t.Error("server.disableStartupMessage = false, want true")
-	}
-
-	if server.errorHandler == nil {
-		t.Error("server.errorHandler is nil")
-	}
+	require.NotNil(t, server, "New() with custom config returned nil")
+	assert.True(t, server.disableStartupMessage, "server.disableStartupMessage = false, want true")
+	assert.NotNil(t, server.errorHandler, "server.errorHandler is nil")
 }
 
 // TestServerRouter tests the Router method
@@ -50,13 +37,8 @@ func TestServerRouter(t *testing.T) {
 	server := New(DefaultConfig())
 	router := server.Router()
 
-	if router == nil {
-		t.Fatal("Server.Router() returned nil")
-	}
-
-	if router != server.router {
-		t.Error("Server.Router() did not return the server's router")
-	}
+	require.NotNil(t, router, "Server.Router() returned nil")
+	assert.Equal(t, server.router, router, "Server.Router() did not return the server's router")
 }
 
 // TestServerHTTPMethods tests the HTTP method registration methods of Server
@@ -66,63 +48,41 @@ func TestServerHTTPMethods(t *testing.T) {
 
 	// Test GET
 	result := server.GET("/users", handler)
-	if result != server.router {
-		t.Error("Server.GET() did not return the router")
-	}
-	if len(server.router.Routes) != 1 {
-		t.Errorf("len(server.router.Routes) = %d, want 1", len(server.router.Routes))
-	}
-	if server.router.Routes[0].Method != "GET" {
-		t.Errorf("server.router.Routes[0].Method = %q, want %q", server.router.Routes[0].Method, "GET")
-	}
+	assert.Equal(t, server.router, result, "Server.GET() did not return the router")
+	assert.Len(t, server.router.Routes, 1, "len(server.router.Routes) should be 1")
+	assert.Equal(t, "GET", server.router.Routes[0].Method, "server.router.Routes[0].Method should be GET")
 
 	// Test HEAD
 	server.HEAD("/users", handler)
-	if server.router.Routes[1].Method != "HEAD" {
-		t.Errorf("server.router.Routes[1].Method = %q, want %q", server.router.Routes[1].Method, "HEAD")
-	}
+	assert.Equal(t, "HEAD", server.router.Routes[1].Method, "server.router.Routes[1].Method should be HEAD")
 
 	// Test POST
 	server.POST("/users", handler)
-	if server.router.Routes[2].Method != "POST" {
-		t.Errorf("server.router.Routes[2].Method = %q, want %q", server.router.Routes[2].Method, "POST")
-	}
+	assert.Equal(t, "POST", server.router.Routes[2].Method, "server.router.Routes[2].Method should be POST")
 
 	// Test PUT
 	server.PUT("/users", handler)
-	if server.router.Routes[3].Method != "PUT" {
-		t.Errorf("server.router.Routes[3].Method = %q, want %q", server.router.Routes[3].Method, "PUT")
-	}
+	assert.Equal(t, "PUT", server.router.Routes[3].Method, "server.router.Routes[3].Method should be PUT")
 
 	// Test DELETE
 	server.DELETE("/users", handler)
-	if server.router.Routes[4].Method != "DELETE" {
-		t.Errorf("server.router.Routes[4].Method = %q, want %q", server.router.Routes[4].Method, "DELETE")
-	}
+	assert.Equal(t, "DELETE", server.router.Routes[4].Method, "server.router.Routes[4].Method should be DELETE")
 
 	// Test CONNECT
 	server.CONNECT("/users", handler)
-	if server.router.Routes[5].Method != "CONNECT" {
-		t.Errorf("server.router.Routes[5].Method = %q, want %q", server.router.Routes[5].Method, "CONNECT")
-	}
+	assert.Equal(t, "CONNECT", server.router.Routes[5].Method, "server.router.Routes[5].Method should be CONNECT")
 
 	// Test OPTIONS
 	server.OPTIONS("/users", handler)
-	if server.router.Routes[6].Method != "OPTIONS" {
-		t.Errorf("server.router.Routes[6].Method = %q, want %q", server.router.Routes[6].Method, "OPTIONS")
-	}
+	assert.Equal(t, "OPTIONS", server.router.Routes[6].Method, "server.router.Routes[6].Method should be OPTIONS")
 
 	// Test TRACE
 	server.TRACE("/users", handler)
-	if server.router.Routes[7].Method != "TRACE" {
-		t.Errorf("server.router.Routes[7].Method = %q, want %q", server.router.Routes[7].Method, "TRACE")
-	}
+	assert.Equal(t, "TRACE", server.router.Routes[7].Method, "server.router.Routes[7].Method should be TRACE")
 
 	// Test PATCH
 	server.PATCH("/users", handler)
-	if server.router.Routes[8].Method != "PATCH" {
-		t.Errorf("server.router.Routes[8].Method = %q, want %q", server.router.Routes[8].Method, "PATCH")
-	}
+	assert.Equal(t, "PATCH", server.router.Routes[8].Method, "server.router.Routes[8].Method should be PATCH")
 }
 
 // TestServerUse tests the Use method of Server
@@ -135,9 +95,7 @@ func TestServerUse(t *testing.T) {
 	}
 
 	server.Use(middleware1)
-	if len(server.router.middlewareFuncs) != 1 {
-		t.Errorf("len(server.router.middlewareFuncs) = %d, want 1", len(server.router.middlewareFuncs))
-	}
+	assert.Len(t, server.router.middlewareFuncs, 1, "len(server.router.middlewareFuncs) should be 1")
 
 	// Test with multiple middleware functions
 	middleware2 := func(c *Ctx) {
@@ -145,17 +103,12 @@ func TestServerUse(t *testing.T) {
 	}
 
 	server.Use(middleware2)
-	if len(server.router.middlewareFuncs) != 2 {
-		t.Errorf("len(server.router.middlewareFuncs) = %d, want 2", len(server.router.middlewareFuncs))
-	}
+	assert.Len(t, server.router.middlewareFuncs, 2, "len(server.router.middlewareFuncs) should be 2")
 
 	// Test with invalid middleware (should panic)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Server.Use() with invalid middleware did not panic")
-		}
-	}()
-	server.Use("not a middleware")
+	assert.Panics(t, func() {
+		server.Use("not a middleware")
+	}, "Server.Use() with invalid middleware should panic")
 }
 
 // TestServerNotFound tests the NotFound method of Server
@@ -170,9 +123,7 @@ func TestServerNotFound(t *testing.T) {
 	server.NotFound(customHandler)
 
 	// Verify the handler was set
-	if server.router.NotFound == nil {
-		t.Error("server.router.NotFound is nil after setting")
-	}
+	assert.NotNil(t, server.router.NotFound, "server.router.NotFound is nil after setting")
 
 	// Create a request for a non-existent route
 	req, _ := http.NewRequest("GET", "http://example.com/nonexistent", nil)
@@ -186,12 +137,8 @@ func TestServerNotFound(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check the response
-	if w.Code != StatusNotFound {
-		t.Errorf("w.Code = %d, want %d", w.Code, StatusNotFound)
-	}
-	if w.Body.String() != "Custom 404" {
-		t.Errorf("w.Body = %q, want %q", w.Body.String(), "Custom 404")
-	}
+	assert.Equal(t, StatusNotFound, w.Code, "Expected status code to be StatusNotFound")
+	assert.Equal(t, "Custom 404", w.Body.String(), "Expected body to be 'Custom 404'")
 }
 
 // TestServerGroup tests the Group method of Server
@@ -200,10 +147,7 @@ func TestServerGroup(t *testing.T) {
 
 	// Create a group
 	group := server.Group("/api")
-
-	if group == nil {
-		t.Fatal("Server.Group() returned nil")
-	}
+	require.NotNil(t, group, "Server.Group() returned nil")
 
 	// Add a route to the group
 	handlerCalled := false
@@ -224,17 +168,11 @@ func TestServerGroup(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check that the handler was called
-	if !handlerCalled {
-		t.Error("Group handler was not called")
-	}
+	assert.True(t, handlerCalled, "Group handler was not called")
 
 	// Check the response
-	if w.Code != StatusOK {
-		t.Errorf("w.Code = %d, want %d", w.Code, StatusOK)
-	}
-	if w.Body.String() != "OK" {
-		t.Errorf("w.Body = %q, want %q", w.Body.String(), "OK")
-	}
+	assert.Equal(t, StatusOK, w.Code, "Expected status code to be StatusOK")
+	assert.Equal(t, "OK", w.Body.String(), "Expected body to be 'OK'")
 }
 
 // TestDefaultErrorHandler tests the defaultErrorHandler function
@@ -255,12 +193,8 @@ func TestDefaultErrorHandler(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check the response
-	if w.Code != StatusInternalServerError {
-		t.Errorf("w.Code = %d, want %d", w.Code, StatusInternalServerError)
-	}
-	if w.Body.String() != "test error" {
-		t.Errorf("w.Body = %q, want %q", w.Body.String(), "test error")
-	}
+	assert.Equal(t, StatusInternalServerError, w.Code, "Expected status code to be StatusInternalServerError")
+	assert.Equal(t, "test error", w.Body.String(), "Expected body to match error message")
 
 	// Test with HttpError
 	w = httptest.NewRecorder()
@@ -278,15 +212,9 @@ func TestDefaultErrorHandler(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check the response
-	if w.Code != StatusBadRequest {
-		t.Errorf("w.Code = %d, want %d", w.Code, StatusBadRequest)
-	}
-	if w.Body.String() != "bad request" {
-		t.Errorf("w.Body = %q, want %q", w.Body.String(), "bad request")
-	}
+	assert.Equal(t, StatusBadRequest, w.Code, "Expected status code to be StatusBadRequest")
+	assert.Equal(t, "bad request", w.Body.String(), "Expected body to match HttpError message")
 }
-
-// TestEstimateResponseSize has been moved to internal/httpparser/httpparser_test.go
 
 // TestDummyResponseWriter tests the dummyResponseWriter implementation
 func TestDummyResponseWriter(t *testing.T) {
@@ -297,24 +225,16 @@ func TestDummyResponseWriter(t *testing.T) {
 
 	// Test Header method
 	header := d.Header()
-	if header == nil {
-		t.Error("dummyResponseWriter.Header() returned nil")
-	}
+	assert.NotNil(t, header, "dummyResponseWriter.Header() returned nil")
 
 	// Test setting a header value
 	header.Set("Content-Type", "application/json")
-	if header.Get("Content-Type") != "application/json" {
-		t.Errorf("header.Get(\"Content-Type\") = %q, want %q", header.Get("Content-Type"), "application/json")
-	}
+	assert.Equal(t, "application/json", header.Get("Content-Type"), "Header value not set correctly")
 
 	// Test Write method
 	n, err := d.Write([]byte("test"))
-	if err != nil {
-		t.Errorf("dummyResponseWriter.Write() returned error: %v", err)
-	}
-	if n != 4 {
-		t.Errorf("dummyResponseWriter.Write() = %d, want %d", n, 4)
-	}
+	assert.NoError(t, err, "dummyResponseWriter.Write() returned error")
+	assert.Equal(t, 4, n, "dummyResponseWriter.Write() returned incorrect byte count")
 
 	// Test WriteHeader method (should be a no-op)
 	d.WriteHeader(StatusOK)
@@ -323,29 +243,16 @@ func TestDummyResponseWriter(t *testing.T) {
 	d.Flush()
 }
 
-// TestHttpCodec has been moved to internal/httpparser/httpparser_test.go
-
-// TestHttpCodecGetContentLength has been moved to internal/httpparser/httpparser_test.go
-
-// TestHttpCodecParse has been moved to internal/httpparser/httpparser_test.go
-
 // TestNoopLogger tests the noopLogger implementation
 func TestNoopLogger(t *testing.T) {
 	logger := &noopLogger{}
 
 	// Test all logger methods (they should not panic)
-	logger.Debugf("test %s", "debug")
-	logger.Infof("test %s", "info")
-	logger.Warnf("test %s", "warn")
-	logger.Errorf("test %s", "error")
-
-	// Test Fatalf separately with defer/recover to catch potential panics
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("logger.Fatalf() panicked: %v", r)
-		}
-	}()
-	logger.Fatalf("test %s", "fatal")
+	assert.NotPanics(t, func() {
+		logger.Debugf("test %s", "debug")
+		logger.Infof("test %s", "info")
+		logger.Warnf("test %s", "warn")
+		logger.Errorf("test %s", "error")
+		logger.Fatalf("test %s", "fatal")
+	}, "Logger methods should not panic")
 }
-
-// TestParserResetAfterError has been moved to internal/httpparser/httpparser_test.go

@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestCookieString(t *testing.T) {
@@ -125,9 +127,7 @@ func TestCookieString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.cookie.String()
-			if result != tt.expected {
-				t.Errorf("Cookie.String() = %q, want %q", result, tt.expected)
-			}
+			assert.Equal(t, tt.expected, result, "Cookie.String() menghasilkan string yang tidak sesuai")
 		})
 	}
 }
@@ -177,21 +177,17 @@ func TestCtxCookie(t *testing.T) {
 			cookies := resp.Header.Values("Set-Cookie")
 
 			if tt.cookie == nil {
-				if len(cookies) > 0 {
-					t.Errorf("Expected no cookies to be set for nil cookie, got %v", cookies)
-				}
+				assert.Empty(t, cookies, "Tidak seharusnya ada cookie yang diset untuk nil cookie")
 				return
 			}
 
-			if len(cookies) == 0 {
-				t.Errorf("Expected cookie to be set, got none")
+			assert.NotEmpty(t, cookies, "Cookie seharusnya diset")
+			if !assert.GreaterOrEqual(t, len(cookies), 1, "Minimal satu cookie seharusnya diset") {
 				return
 			}
 
 			expected := tt.cookie.String()
-			if cookies[0] != expected {
-				t.Errorf("Cookie header = %q, want %q", cookies[0], expected)
-			}
+			assert.Equal(t, expected, cookies[0], "Header cookie tidak sesuai")
 		})
 	}
 }
@@ -252,9 +248,7 @@ func TestCtxGetCookie(t *testing.T) {
 
 			value := ctx.Cookies(tt.cookieName)
 
-			if value != tt.expected {
-				t.Errorf("GetCookie(%q) = %q, want %q", tt.cookieName, value, tt.expected)
-			}
+			assert.Equal(t, tt.expected, value, "Cookies(%q) menghasilkan nilai yang tidak sesuai", tt.cookieName)
 		})
 	}
 }

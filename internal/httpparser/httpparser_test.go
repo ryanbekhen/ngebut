@@ -1,26 +1,22 @@
 package httpparser
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/evanphx/wildcat"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestEstimateResponseSize tests the EstimateResponseSize function
 func TestEstimateResponseSize(t *testing.T) {
 	// Test with empty body and headers
 	size := EstimateResponseSize(200, Header{}, []byte{})
-	if size <= 0 {
-		t.Errorf("EstimateResponseSize() = %d, want > 0", size)
-	}
+	assert.Greater(t, size, 0, "Size should be greater than 0 for empty body and headers")
 
 	// Test with body
 	body := []byte("Hello, World!")
 	size = EstimateResponseSize(200, Header{}, body)
-	if size <= len(body) {
-		t.Errorf("EstimateResponseSize() = %d, want > %d", size, len(body))
-	}
+	assert.Greater(t, size, len(body), "Size should be greater than body length")
 
 	// Test with headers
 	header := Header{
@@ -28,9 +24,7 @@ func TestEstimateResponseSize(t *testing.T) {
 		"X-Custom":     []string{"value1", "value2"},
 	}
 	size = EstimateResponseSize(200, header, body)
-	if size <= 0 {
-		t.Errorf("EstimateResponseSize() = %d, want > 0", size)
-	}
+	assert.Greater(t, size, 0, "Size should be greater than 0 with headers")
 }
 
 // TestCodec tests the Codec implementation
@@ -41,20 +35,14 @@ func TestCodec(t *testing.T) {
 	// Test ResetParser method
 	hc.ContentLength = 100
 	hc.ResetParser()
-	if hc.ContentLength != -1 {
-		t.Errorf("hc.ContentLength = %d, want %d", hc.ContentLength, -1)
-	}
+	assert.Equal(t, -1, hc.ContentLength, "ContentLength should be -1 after ResetParser")
 
 	// Test Reset method
 	hc.Buf = append(hc.Buf, []byte("test")...)
 	hc.ContentLength = 100
 	hc.Reset()
-	if hc.ContentLength != -1 {
-		t.Errorf("hc.ContentLength = %d, want %d", hc.ContentLength, -1)
-	}
-	if len(hc.Buf) != 0 {
-		t.Errorf("len(hc.Buf) = %d, want %d", len(hc.Buf), 0)
-	}
+	assert.Equal(t, -1, hc.ContentLength, "ContentLength should be -1 after Reset")
+	assert.Empty(t, hc.Buf, "Buffer should be empty after Reset")
 
 	// Test WriteResponse method
 	statusCode := 200
@@ -66,26 +54,18 @@ func TestCodec(t *testing.T) {
 	hc.WriteResponse(statusCode, header, body)
 
 	// Check that the buffer contains the expected response
-	if len(hc.Buf) == 0 {
-		t.Error("WriteResponse() did not write anything to the buffer")
-	}
+	assert.NotEmpty(t, hc.Buf, "WriteResponse should write data to the buffer")
 
 	// Check for status line
 	statusLine := "HTTP/1.1 200 OK\r\n"
-	if !bytes.Contains(hc.Buf, []byte(statusLine)) {
-		t.Errorf("Response does not contain status line: %q", statusLine)
-	}
+	assert.Contains(t, string(hc.Buf), statusLine, "Response should contain status line")
 
 	// Check for header
 	headerLine := "Content-Type: text/plain\r\n"
-	if !bytes.Contains(hc.Buf, []byte(headerLine)) {
-		t.Errorf("Response does not contain header: %q", headerLine)
-	}
+	assert.Contains(t, string(hc.Buf), headerLine, "Response should contain header")
 
 	// Check for body
-	if !bytes.Contains(hc.Buf, body) {
-		t.Errorf("Response does not contain body: %q", body)
-	}
+	assert.Contains(t, string(hc.Buf), string(body), "Response should contain body")
 }
 
 // TestCodecGetContentLength tests the GetContentLength method of Codec
@@ -96,18 +76,14 @@ func TestCodecGetContentLength(t *testing.T) {
 	// Test when ContentLength is already set
 	hc.ContentLength = 100
 	length := hc.GetContentLength()
-	if length != 100 {
-		t.Errorf("GetContentLength() = %d, want %d", length, 100)
-	}
+	assert.Equal(t, 100, length, "GetContentLength should return the set ContentLength")
 
 	// Test when ContentLength is not set and Content-Length header is present
 	hc.ContentLength = -1
 	hc.Parser.Parse([]byte("GET / HTTP/1.1\r\nContent-Length: 42\r\n\r\n"))
 
 	length = hc.GetContentLength()
-	if length != 42 {
-		t.Errorf("GetContentLength() = %d, want %d", length, 42)
-	}
+	assert.Equal(t, 42, length, "GetContentLength should return header Content-Length value")
 
 	// Test when ContentLength is not set and Content-Length header is not present
 	hc.ContentLength = -1
@@ -117,9 +93,7 @@ func TestCodecGetContentLength(t *testing.T) {
 	hc.Parser.Parse([]byte("GET / HTTP/1.1\r\n\r\n"))
 
 	length = hc.GetContentLength()
-	if length != -1 {
-		t.Errorf("GetContentLength() = %d, want %d", length, -1)
-	}
+	assert.Equal(t, -1, length, "GetContentLength should return -1 when no Content-Length is set")
 }
 
 // TestCodecParse tests the Parse method of Codec
@@ -131,58 +105,36 @@ func TestCodecParse(t *testing.T) {
 	simpleReq := "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
 	n, body, err := hc.Parse([]byte(simpleReq))
 
-	if err != nil {
-		t.Errorf("Parse() returned error: %v", err)
-	}
-	if n != len(simpleReq) {
-		t.Errorf("Parse() = %d, want %d", n, len(simpleReq))
-	}
+	assert.NoError(t, err, "Parse should not return error for valid request")
+	assert.Equal(t, len(simpleReq), n, "Parse should return the correct number of bytes read")
 	// For a GET request, body should be nil or empty
-	if body != nil && len(body) > 0 {
-		t.Errorf("Parse() returned non-empty body for GET request: %v", body)
-	}
+	assert.True(t, body == nil || len(body) == 0, "Body should be nil or empty for GET request")
 
 	// Test parsing a POST request with Content-Length
 	postReq := "POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 11\r\n\r\nHello World"
 	hc.ResetParser()
 	n, body, err = hc.Parse([]byte(postReq))
 
-	if err != nil {
-		t.Errorf("Parse() returned error: %v", err)
-	}
-	if n != len(postReq) {
-		t.Errorf("Parse() = %d, want %d", n, len(postReq))
-	}
-	// For a POST request with body, body should not be nil
-	if body == nil {
-		t.Error("Parse() returned nil body for POST request with body")
-	} else if string(body) != "Hello World" {
-		t.Errorf("Parse() returned body = %q, want %q", string(body), "Hello World")
-	}
+	assert.NoError(t, err, "Parse should not return error for valid POST request")
+	assert.Equal(t, len(postReq), n, "Parse should return the correct number of bytes read")
+	assert.NotNil(t, body, "Body should not be nil for POST request with body")
+	assert.Equal(t, "Hello World", string(body), "Body content should match")
 
 	// Test parsing an incomplete request
 	incompleteReq := "GET / HTTP/1.1\r\nHost: example.com\r\n"
 	hc.ResetParser()
 	_, _, err = hc.Parse([]byte(incompleteReq))
 
-	if err == nil {
-		t.Error("Parse() did not return error for incomplete request")
-	}
+	assert.Error(t, err, "Parse should return error for incomplete request")
 
 	// Test parsing a chunked request
 	chunkedReq := "POST / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nHello\r\n0\r\n\r\n"
 	hc.ResetParser()
 	n, body, err = hc.Parse([]byte(chunkedReq))
 
-	if err != nil {
-		t.Errorf("Parse() returned error: %v", err)
-	}
-	// For a chunked request, body should not be nil
-	if body == nil {
-		t.Error("Parse() returned nil body for chunked request")
-	} else if string(body) != "Hello" {
-		t.Errorf("Parse() returned body = %q, want %q", string(body), "Hello")
-	}
+	assert.NoError(t, err, "Parse should not return error for valid chunked request")
+	assert.NotNil(t, body, "Body should not be nil for chunked request")
+	assert.Equal(t, "Hello", string(body), "Body content should match")
 }
 
 // TestParserReset tests that the parser can be reset
@@ -193,9 +145,7 @@ func TestParserReset(t *testing.T) {
 	// First, parse an incomplete request which should fail
 	incompleteReq := "GET / HTTP/1.1\r\nHost: example.com\r\n"
 	_, _, err := hc.Parse([]byte(incompleteReq))
-	if err == nil {
-		t.Error("Parse() did not return error for incomplete request")
-	}
+	assert.Error(t, err, "Parse should return error for incomplete request")
 
 	// Reset the parser
 	hc.ResetParser()
@@ -205,16 +155,9 @@ func TestParserReset(t *testing.T) {
 	n, body, err := hc.Parse([]byte(completeReq))
 
 	// This should succeed
-	if err != nil {
-		t.Errorf("Parse() returned error after reset: %v", err)
-	}
-	if n != len(completeReq) {
-		t.Errorf("Parse() = %d, want %d", n, len(completeReq))
-	}
-	// For a GET request, body should be nil or empty
-	if body != nil && len(body) > 0 {
-		t.Errorf("Parse() returned non-empty body for GET request: %v", body)
-	}
+	assert.NoError(t, err, "Parse should not return error after reset")
+	assert.Equal(t, len(completeReq), n, "Parse should return the correct number of bytes read")
+	assert.True(t, body == nil || len(body) == 0, "Body should be nil or empty for GET request")
 }
 
 // TestBodyReader tests the bodyReader implementation
@@ -230,30 +173,18 @@ func TestBodyReader(t *testing.T) {
 	n, err := br.Read(buf)
 
 	// Check results
-	if err != nil {
-		t.Errorf("bodyReader.Read() returned error: %v", err)
-	}
-	if n != len(testData) {
-		t.Errorf("bodyReader.Read() = %d, want %d", n, len(testData))
-	}
-	if !bytes.Equal(buf, testData) {
-		t.Errorf("bodyReader.Read() = %q, want %q", buf, testData)
-	}
+	assert.NoError(t, err, "bodyReader.Read should not return error")
+	assert.Equal(t, len(testData), n, "bodyReader.Read should read the correct number of bytes")
+	assert.Equal(t, testData, buf, "bodyReader.Read should return the correct data")
 
 	// Close the reader
 	err = br.Close()
-	if err != nil {
-		t.Errorf("bodyReader.Close() returned error: %v", err)
-	}
+	assert.NoError(t, err, "bodyReader.Close should not return error")
 
 	// Read again after close (should work because Close resets position)
 	n, err = br.Read(buf)
-	if err != nil {
-		t.Errorf("bodyReader.Read() after Close returned error: %v", err)
-	}
-	if n != len(testData) {
-		t.Errorf("bodyReader.Read() after Close = %d, want %d", n, len(testData))
-	}
+	assert.NoError(t, err, "bodyReader.Read after Close should not return error")
+	assert.Equal(t, len(testData), n, "bodyReader.Read after Close should read the correct number of bytes")
 
 	// Release the reader back to the pool
 	ReleaseBodyReader(br)
@@ -263,22 +194,16 @@ func TestBodyReader(t *testing.T) {
 func TestPooledReaders(t *testing.T) {
 	// Test GetReader and ReleaseReader
 	reader := GetReader()
-	if reader == nil {
-		t.Error("GetReader() returned nil")
-	}
+	assert.NotNil(t, reader, "GetReader should not return nil")
 	ReleaseReader(reader)
 
 	// Test GetBytesReader and ReleaseBytesReader
 	bytesReader := GetBytesReader()
-	if bytesReader == nil {
-		t.Error("GetBytesReader() returned nil")
-	}
+	assert.NotNil(t, bytesReader, "GetBytesReader should not return nil")
 	ReleaseBytesReader(bytesReader)
 
 	// Test GetBodyReader and ReleaseBodyReader
 	bodyReader := GetBodyReader([]byte("test"))
-	if bodyReader == nil {
-		t.Error("GetBodyReader() returned nil")
-	}
+	assert.NotNil(t, bodyReader, "GetBodyReader should not return nil")
 	ReleaseBodyReader(bodyReader)
 }

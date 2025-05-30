@@ -354,7 +354,7 @@ func processRequest(hs *httpServer, hc *httpparser.Codec, req *Request, c gnet.C
 	}
 
 	// Then copy headers from context (overriding any with same name)
-	for k, values := range ctx.header {
+	for k, values := range ctx.Request.Header {
 		if len(values) > 0 {
 			parserHeaders[k] = values
 		}

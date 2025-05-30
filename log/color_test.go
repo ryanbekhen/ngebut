@@ -1,6 +1,7 @@
 package log
 
 import (
+	"github.com/stretchr/testify/assert"
 	"testing"
 )
 
@@ -9,25 +10,19 @@ func TestColoredString(t *testing.T) {
 	// Test with color enabled
 	result := ColoredString("test", ColorRed, false)
 	expected := ColorRed + "test" + ColorReset
-	if result != expected {
-		t.Errorf("ColoredString(\"test\", ColorRed, false) = %q, expected %q", result, expected)
-	}
+	assert.Equal(t, expected, result, "ColoredString dengan warna merah seharusnya menambahkan kode warna")
 
 	// Test with color disabled
 	result = ColoredString("test", ColorRed, true)
 	expected = "test"
-	if result != expected {
-		t.Errorf("ColoredString(\"test\", ColorRed, true) = %q, expected %q", result, expected)
-	}
+	assert.Equal(t, expected, result, "ColoredString dengan warna dinonaktifkan seharusnya tidak menambahkan kode warna")
 
 	// Test with different colors
 	colors := []string{ColorRed, ColorGreen, ColorBlue, ColorYellow, ColorPurple, ColorCyan, ColorWhite, ColorBold}
 	for _, color := range colors {
 		result = ColoredString("test", color, false)
 		expected = color + "test" + ColorReset
-		if result != expected {
-			t.Errorf("ColoredString(\"test\", %q, false) = %q, expected %q", color, result, expected)
-		}
+		assert.Equal(t, expected, result, "ColoredString dengan warna %s seharusnya bekerja dengan benar", color)
 	}
 }
 
@@ -48,9 +43,7 @@ func TestColoredLevel(t *testing.T) {
 
 	for _, test := range levels {
 		result := ColoredLevel(test.level, true)
-		if result != test.expected {
-			t.Errorf("ColoredLevel(%v, true) = %q, expected %q", test.level, result, test.expected)
-		}
+		assert.Equal(t, test.expected, result, "ColoredLevel(%v, true) seharusnya mengembalikan string level tanpa warna", test.level)
 	}
 
 	// Test with color enabled
@@ -68,8 +61,6 @@ func TestColoredLevel(t *testing.T) {
 
 	for _, test := range coloredLevels {
 		result := ColoredLevel(test.level, false)
-		if result != test.expected {
-			t.Errorf("ColoredLevel(%v, false) = %q, expected %q", test.level, result, test.expected)
-		}
+		assert.Equal(t, test.expected, result, "ColoredLevel(%v, false) seharusnya mengembalikan string level dengan warna", test.level)
 	}
 }

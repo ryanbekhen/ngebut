@@ -127,3 +127,10 @@ func (r *Request) WithContext(ctx context.Context) *Request {
 func (r *Request) UserAgent() string {
 	return r.Header.Get("User-Agent")
 }
+
+func (r *Request) SetContext(ctx context.Context) {
+	if ctx == nil {
+		panic("nil context")
+	}
+	r.ctx = ctx
+}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ryanbekhen/ngebut/log"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestInitLogger tests the initLogger function
@@ -39,9 +40,7 @@ func TestInitLogger(t *testing.T) {
 		initLogger(tc.level)
 
 		// Check that the logger level is set correctly
-		if logger.GetLevel() != tc.expected {
-			t.Errorf("initLogger(%v) set logger level to %v, want %v", tc.level, logger.GetLevel(), tc.expected)
-		}
+		assert.Equal(t, tc.expected, logger.GetLevel(), "Logger level should be set correctly for level %v", tc.level)
 
 		// We can't directly check the global log level, but we can test that
 		// logging works at the expected level by writing to our buffer
@@ -64,21 +63,20 @@ func TestInitLogger(t *testing.T) {
 
 		switch tc.expected {
 		case log.DebugLevel:
-			if !hasDebug || !hasInfo || !hasWarn || !hasError {
-				t.Errorf("initLogger(%v) didn't log all messages at DebugLevel", tc.level)
-			}
+			assert.True(t, hasDebug && hasInfo && hasWarn && hasError,
+				"All messages should be logged at DebugLevel")
 		case log.InfoLevel:
-			if hasDebug || !hasInfo || !hasWarn || !hasError {
-				t.Errorf("initLogger(%v) didn't log correctly at InfoLevel", tc.level)
-			}
+			assert.False(t, hasDebug, "Debug messages shouldn't be logged at InfoLevel")
+			assert.True(t, hasInfo && hasWarn && hasError,
+				"Info, Warn and Error messages should be logged at InfoLevel")
 		case log.WarnLevel:
-			if hasDebug || hasInfo || !hasWarn || !hasError {
-				t.Errorf("initLogger(%v) didn't log correctly at WarnLevel", tc.level)
-			}
+			assert.False(t, hasDebug || hasInfo, "Debug and Info messages shouldn't be logged at WarnLevel")
+			assert.True(t, hasWarn && hasError,
+				"Warn and Error messages should be logged at WarnLevel")
 		case log.ErrorLevel:
-			if hasDebug || hasInfo || hasWarn || !hasError {
-				t.Errorf("initLogger(%v) didn't log correctly at ErrorLevel", tc.level)
-			}
+			assert.False(t, hasDebug || hasInfo || hasWarn,
+				"Only Error messages should be logged at ErrorLevel")
+			assert.True(t, hasError, "Error messages should be logged at ErrorLevel")
 		}
 	}
 }
@@ -105,19 +103,16 @@ func TestDisplayStartupMessage(t *testing.T) {
 	output := buf.String()
 
 	// Check for the ASCII art logo (first line)
-	if !strings.Contains(output, "_   _            _           _") {
-		t.Errorf("displayStartupMessage() output doesn't contain the logo")
-	}
+	assert.Contains(t, output, "_   _            _           _",
+		"Output should contain the ASCII art logo")
 
 	// Check for the server address
-	if !strings.Contains(output, "Server is running on :8080") {
-		t.Errorf("displayStartupMessage() output doesn't contain the server address")
-	}
+	assert.Contains(t, output, "Server is running on :8080",
+		"Output should contain the server address")
 
 	// Check for the stop message
-	if !strings.Contains(output, "Press Ctrl+C to stop the server") {
-		t.Errorf("displayStartupMessage() output doesn't contain the stop message")
-	}
+	assert.Contains(t, output, "Press Ctrl+C to stop the server",
+		"Output should contain the stop message")
 }
 
 // TestLoggerIntegration tests the integration of the logger with the rest of the system
@@ -130,9 +125,8 @@ func TestLoggerIntegration(t *testing.T) {
 
 	// Create a pipe to capture stdout
 	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("Failed to create pipe: %v", err)
-	}
+	assert.NoError(t, err, "Failed to create pipe")
+
 	os.Stdout = w
 
 	// Initialize the logger with debug level
@@ -150,22 +144,17 @@ func TestLoggerIntegration(t *testing.T) {
 	// Read the output from the pipe
 	var buf bytes.Buffer
 	_, err = buf.ReadFrom(r)
-	if err != nil {
-		t.Fatalf("Failed to read from pipe: %v", err)
-	}
+	assert.NoError(t, err, "Failed to read from pipe")
+
 	output := buf.String()
 
 	// Check that the output contains the expected messages
-	if !strings.Contains(output, "This is a debug message") {
-		t.Errorf("Logger output doesn't contain the debug message")
-	}
-	if !strings.Contains(output, "This is an info message") {
-		t.Errorf("Logger output doesn't contain the info message")
-	}
-	if !strings.Contains(output, "This is a warning message") {
-		t.Errorf("Logger output doesn't contain the warning message")
-	}
-	if !strings.Contains(output, "This is an error message") {
-		t.Errorf("Logger output doesn't contain the error message")
-	}
+	assert.Contains(t, output, "This is a debug message",
+		"Logger output should contain the debug message")
+	assert.Contains(t, output, "This is an info message",
+		"Logger output should contain the info message")
+	assert.Contains(t, output, "This is a warning message",
+		"Logger output should contain the warning message")
+	assert.Contains(t, output, "This is an error message",
+		"Logger output should contain the error message")
 }

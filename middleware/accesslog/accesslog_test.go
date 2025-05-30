@@ -12,35 +12,28 @@ import (
 
 	"github.com/ryanbekhen/ngebut"
 	"github.com/ryanbekhen/ngebut/log"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestNew tests the New function
 func TestNew(t *testing.T) {
 	// Test with default config
 	middleware := New()
-	if middleware == nil {
-		t.Fatal("New() returned nil")
-	}
+	assert.NotNil(t, middleware, "New() returned nil")
 
 	// Test with custom config
 	customConfig := Config{
 		Format: "${method} ${path}",
 	}
 	middleware = New(customConfig)
-	if middleware == nil {
-		t.Fatal("New(customConfig) returned nil")
-	}
+	assert.NotNil(t, middleware, "New(customConfig) returned nil")
 }
 
 // TestDefaultConfig tests the DefaultConfig function
 func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
-	if config.Format == "" {
-		t.Error("DefaultConfig() returned empty Format")
-	}
-	if config.Format != "${time} | ${status} | ${latency_human} | ${method} ${path} | ${error}" {
-		t.Errorf("DefaultConfig() returned unexpected Format: %s", config.Format)
-	}
+	assert.NotEmpty(t, config.Format, "DefaultConfig() returned empty Format")
+	assert.Equal(t, "${time} | ${status} | ${latency_human} | ${method} ${path} | ${error}", config.Format, "DefaultConfig() returned unexpected Format")
 }
 
 // TestLogger tests the logger initialization
@@ -57,9 +50,7 @@ func TestLogger(t *testing.T) {
 	logger = testLogger
 
 	// Verify that the logger is set correctly
-	if logger != testLogger {
-		t.Error("Logger was not set correctly")
-	}
+	assert.Equal(t, testLogger, logger, "Logger was not set correctly")
 }
 
 // TestHelperFunctions tests the helper functions
@@ -67,21 +58,15 @@ func TestHelperFunctions(t *testing.T) {
 	// Test replaceTag
 	msg := "Hello ${name}!"
 	result := replaceTag(msg, "${name}", "World")
-	if result != "Hello World!" {
-		t.Errorf("replaceTag returned %q, expected %q", result, "Hello World!")
-	}
+	assert.Equal(t, "Hello World!", result, "replaceTag returned incorrect result")
 
 	// Test intToString
 	result = intToString(123)
-	if result != "123" {
-		t.Errorf("intToString returned %q, expected %q", result, "123")
-	}
+	assert.Equal(t, "123", result, "intToString returned incorrect result")
 
 	// Test int64ToString
 	result = int64ToString(int64(9223372036854775807))
-	if result != "9223372036854775807" {
-		t.Errorf("int64ToString returned %q, expected %q", result, "9223372036854775807")
-	}
+	assert.Equal(t, "9223372036854775807", result, "int64ToString returned incorrect result")
 }
 
 // TestMiddlewareBasic tests the basic functionality of the middleware
@@ -117,20 +102,12 @@ func TestMiddlewareBasic(t *testing.T) {
 
 	// Check that something was logged
 	logOutput := buf.String()
-	if logOutput == "" {
-		t.Error("No log output was produced")
-	}
+	assert.NotEmpty(t, logOutput, "No log output was produced")
 
 	// Check that the log contains expected information
-	if !strings.Contains(logOutput, "GET") {
-		t.Error("Log output doesn't contain HTTP method")
-	}
-	if !strings.Contains(logOutput, "/test") {
-		t.Error("Log output doesn't contain request path")
-	}
-	if !strings.Contains(logOutput, "200") {
-		t.Error("Log output doesn't contain status code")
-	}
+	assert.Contains(t, logOutput, "GET", "Log output doesn't contain HTTP method")
+	assert.Contains(t, logOutput, "/test", "Log output doesn't contain request path")
+	assert.Contains(t, logOutput, "200", "Log output doesn't contain status code")
 }
 
 // TestMiddlewareWithError tests the middleware with an error
@@ -168,9 +145,7 @@ func TestMiddlewareWithError(t *testing.T) {
 
 	// Check that the log contains the error
 	logOutput := buf.String()
-	if !strings.Contains(logOutput, "test error") {
-		t.Error("Log output doesn't contain the error message")
-	}
+	assert.Contains(t, logOutput, "test error", "Log output doesn't contain the error message")
 }
 
 // TestMiddlewareStatusCodes tests the middleware with different status codes
@@ -221,14 +196,10 @@ func TestMiddlewareStatusCodes(t *testing.T) {
 			// Check that the log contains the status code
 			logOutput := buf.String()
 			statusStr := strconv.Itoa(tc.statusCode)
-			if !strings.Contains(logOutput, statusStr) {
-				t.Errorf("Log output doesn't contain status code %s", statusStr)
-			}
+			assert.Contains(t, logOutput, statusStr, "Log output doesn't contain status code "+statusStr)
 
 			// Check the log level
-			if !strings.Contains(logOutput, tc.logLevel) {
-				t.Errorf("Log output doesn't contain expected log level %s", tc.logLevel)
-			}
+			assert.Contains(t, logOutput, tc.logLevel, "Log output doesn't contain expected log level "+tc.logLevel)
 		})
 	}
 }
@@ -282,9 +253,7 @@ func TestMiddlewareCustomFormat(t *testing.T) {
 	}
 
 	for _, val := range expectedValues {
-		if !strings.Contains(logOutput, val) {
-			t.Errorf("Log output doesn't contain expected value: %s", val)
-		}
+		assert.Contains(t, logOutput, val, "Log output doesn't contain expected value: "+val)
 	}
 }
 
@@ -332,21 +301,16 @@ func TestMiddlewareLatency(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check that the handler was called
-	if !handlerCalled {
-		t.Error("Handler was not called")
-	}
+	assert.True(t, handlerCalled, "Handler was not called")
 
 	// Check that something was logged
 	logOutput := buf.String()
-	if logOutput == "" {
-		t.Error("No log output was produced")
-	}
-
-	// Print the log output for debugging
-	t.Logf("Log output: %s", logOutput)
+	assert.NotEmpty(t, logOutput, "No log output was produced")
 
 	// Check that the log contains latency information
-	if !strings.Contains(logOutput, "ns") && !strings.Contains(logOutput, "µs") && !strings.Contains(logOutput, "ms") {
-		t.Error("Log output doesn't contain latency information (ns, µs, or ms)")
-	}
+	assert.True(t,
+		strings.Contains(logOutput, "ns") ||
+			strings.Contains(logOutput, "µs") ||
+			strings.Contains(logOutput, "ms"),
+		"Log output doesn't contain latency information (ns, µs, or ms)")
 }

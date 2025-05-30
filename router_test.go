@@ -4,36 +4,29 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestNewRouter tests the NewRouter function
 func TestNewRouter(t *testing.T) {
+	assert := assert.New(t)
+
 	router := NewRouter()
-	if router == nil {
-		t.Fatal("NewRouter() returned nil")
-	}
+	assert.NotNil(router, "NewRouter() returned nil")
 
-	if router.Routes == nil {
-		t.Error("router.Routes is nil")
-	}
-	if len(router.Routes) != 0 {
-		t.Errorf("len(router.Routes) = %d, want 0", len(router.Routes))
-	}
+	assert.NotNil(router.Routes, "router.Routes is nil")
+	assert.Len(router.Routes, 0, "router.Routes should be empty")
 
-	if router.middlewareFuncs == nil {
-		t.Error("router.middlewareFuncs is nil")
-	}
-	if len(router.middlewareFuncs) != 0 {
-		t.Errorf("len(router.middlewareFuncs) = %d, want 0", len(router.middlewareFuncs))
-	}
+	assert.NotNil(router.middlewareFuncs, "router.middlewareFuncs is nil")
+	assert.Len(router.middlewareFuncs, 0, "router.middlewareFuncs should be empty")
 
-	if router.NotFound == nil {
-		t.Error("router.NotFound is nil")
-	}
+	assert.NotNil(router.NotFound, "router.NotFound is nil")
 }
 
 // TestRouterUse tests the Use method of Router
 func TestRouterUse(t *testing.T) {
+	assert := assert.New(t)
 	router := NewRouter()
 
 	// Test with middleware function
@@ -42,9 +35,7 @@ func TestRouterUse(t *testing.T) {
 	}
 
 	router.Use(middleware1)
-	if len(router.middlewareFuncs) != 1 {
-		t.Errorf("len(router.middlewareFuncs) = %d, want 1", len(router.middlewareFuncs))
-	}
+	assert.Len(router.middlewareFuncs, 1, "should have 1 middleware function")
 
 	// Test with multiple middleware functions
 	middleware2 := func(c *Ctx) {
@@ -52,21 +43,17 @@ func TestRouterUse(t *testing.T) {
 	}
 
 	router.Use(middleware2)
-	if len(router.middlewareFuncs) != 2 {
-		t.Errorf("len(router.middlewareFuncs) = %d, want 2", len(router.middlewareFuncs))
-	}
+	assert.Len(router.middlewareFuncs, 2, "should have 2 middleware functions")
 
 	// Test with invalid middleware (should panic)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Router.Use() with invalid middleware did not panic")
-		}
-	}()
-	router.Use("not a middleware")
+	assert.Panics(func() {
+		router.Use("not a middleware")
+	}, "Router.Use() with invalid middleware should panic")
 }
 
 // TestRouterHandle tests the Handle method of Router
 func TestRouterHandle(t *testing.T) {
+	assert := assert.New(t)
 	router := NewRouter()
 
 	// Test with simple pattern
@@ -75,134 +62,85 @@ func TestRouterHandle(t *testing.T) {
 	}
 
 	result := router.Handle("/users", "GET", handler)
-	if result != router {
-		t.Error("Router.Handle() did not return the router")
-	}
-
-	if len(router.Routes) != 1 {
-		t.Errorf("len(router.Routes) = %d, want 1", len(router.Routes))
-	}
+	assert.Equal(router, result, "Router.Handle() should return the router")
+	assert.Len(router.Routes, 1, "should have 1 route")
 
 	route := router.Routes[0]
-	if route.Pattern != "/users" {
-		t.Errorf("route.Pattern = %q, want %q", route.Pattern, "/users")
-	}
-	if route.Method != "GET" {
-		t.Errorf("route.Method = %q, want %q", route.Method, "GET")
-	}
-	if len(route.Handlers) != 1 {
-		t.Errorf("len(route.Handlers) = %d, want 1", len(route.Handlers))
-	}
-	if route.Regex == nil {
-		t.Error("route.Regex is nil")
-	}
+	assert.Equal("/users", route.Pattern, "route pattern should match")
+	assert.Equal("GET", route.Method, "route method should match")
+	assert.Len(route.Handlers, 1, "should have 1 handler")
+	assert.NotNil(route.Regex, "route.Regex should not be nil")
 
 	// Test with pattern containing parameters
 	router.Handle("/users/:id", "POST", handler)
-	if len(router.Routes) != 2 {
-		t.Errorf("len(router.Routes) = %d, want 2", len(router.Routes))
-	}
+	assert.Len(router.Routes, 2, "should have 2 routes")
 
 	route = router.Routes[1]
-	if route.Pattern != "/users/:id" {
-		t.Errorf("route.Pattern = %q, want %q", route.Pattern, "/users/:id")
-	}
-	if route.Method != "POST" {
-		t.Errorf("route.Method = %q, want %q", route.Method, "POST")
-	}
-	if route.Regex == nil {
-		t.Error("route.Regex is nil")
-	}
+	assert.Equal("/users/:id", route.Pattern, "route pattern should match")
+	assert.Equal("POST", route.Method, "route method should match")
+	assert.NotNil(route.Regex, "route.Regex should not be nil")
 
 	// Test with multiple handlers
 	handler2 := func(c *Ctx) {
 		// Another handler
 	}
 	router.Handle("/multi", "DELETE", handler, handler2)
-	if len(router.Routes) != 3 {
-		t.Errorf("len(router.Routes) = %d, want 3", len(router.Routes))
-	}
+	assert.Len(router.Routes, 3, "should have 3 routes")
 
 	route = router.Routes[2]
-	if route.Pattern != "/multi" {
-		t.Errorf("route.Pattern = %q, want %q", route.Pattern, "/multi")
-	}
-	if route.Method != "DELETE" {
-		t.Errorf("route.Method = %q, want %q", route.Method, "DELETE")
-	}
-	if len(route.Handlers) != 2 {
-		t.Errorf("len(route.Handlers) = %d, want 2", len(route.Handlers))
-	}
+	assert.Equal("/multi", route.Pattern, "route pattern should match")
+	assert.Equal("DELETE", route.Method, "route method should match")
+	assert.Len(route.Handlers, 2, "should have 2 handlers")
 }
 
 // TestRouterHTTPMethods tests the HTTP method registration methods of Router
 func TestRouterHTTPMethods(t *testing.T) {
+	assert := assert.New(t)
 	router := NewRouter()
 	handler := func(c *Ctx) {}
 
 	// Test GET
 	result := router.GET("/users", handler)
-	if result != router {
-		t.Error("Router.GET() did not return the router")
-	}
-	if len(router.Routes) != 1 {
-		t.Errorf("len(router.Routes) = %d, want 1", len(router.Routes))
-	}
-	if router.Routes[0].Method != "GET" {
-		t.Errorf("router.Routes[0].Method = %q, want %q", router.Routes[0].Method, "GET")
-	}
+	assert.Equal(router, result, "Router.GET() should return the router")
+	assert.Len(router.Routes, 1, "should have 1 route")
+	assert.Equal("GET", router.Routes[0].Method, "method should be GET")
 
 	// Test HEAD
 	router.HEAD("/users", handler)
-	if router.Routes[1].Method != "HEAD" {
-		t.Errorf("router.Routes[1].Method = %q, want %q", router.Routes[1].Method, "HEAD")
-	}
+	assert.Equal("HEAD", router.Routes[1].Method, "method should be HEAD")
 
 	// Test POST
 	router.POST("/users", handler)
-	if router.Routes[2].Method != "POST" {
-		t.Errorf("router.Routes[2].Method = %q, want %q", router.Routes[2].Method, "POST")
-	}
+	assert.Equal("POST", router.Routes[2].Method, "method should be POST")
 
 	// Test PUT
 	router.PUT("/users", handler)
-	if router.Routes[3].Method != "PUT" {
-		t.Errorf("router.Routes[3].Method = %q, want %q", router.Routes[3].Method, "PUT")
-	}
+	assert.Equal("PUT", router.Routes[3].Method, "method should be PUT")
 
 	// Test DELETE
 	router.DELETE("/users", handler)
-	if router.Routes[4].Method != "DELETE" {
-		t.Errorf("router.Routes[4].Method = %q, want %q", router.Routes[4].Method, "DELETE")
-	}
+	assert.Equal("DELETE", router.Routes[4].Method, "method should be DELETE")
 
 	// Test CONNECT
 	router.CONNECT("/users", handler)
-	if router.Routes[5].Method != "CONNECT" {
-		t.Errorf("router.Routes[5].Method = %q, want %q", router.Routes[5].Method, "CONNECT")
-	}
+	assert.Equal("CONNECT", router.Routes[5].Method, "method should be CONNECT")
 
 	// Test OPTIONS
 	router.OPTIONS("/users", handler)
-	if router.Routes[6].Method != "OPTIONS" {
-		t.Errorf("router.Routes[6].Method = %q, want %q", router.Routes[6].Method, "OPTIONS")
-	}
+	assert.Equal("OPTIONS", router.Routes[6].Method, "method should be OPTIONS")
 
 	// Test TRACE
 	router.TRACE("/users", handler)
-	if router.Routes[7].Method != "TRACE" {
-		t.Errorf("router.Routes[7].Method = %q, want %q", router.Routes[7].Method, "TRACE")
-	}
+	assert.Equal("TRACE", router.Routes[7].Method, "method should be TRACE")
 
 	// Test PATCH
 	router.PATCH("/users", handler)
-	if router.Routes[8].Method != "PATCH" {
-		t.Errorf("router.Routes[8].Method = %q, want %q", router.Routes[8].Method, "PATCH")
-	}
+	assert.Equal("PATCH", router.Routes[8].Method, "method should be PATCH")
 }
 
 // TestRouterServeHTTP tests the ServeHTTP method of Router
 func TestRouterServeHTTP(t *testing.T) {
+	assert := assert.New(t)
 	router := NewRouter()
 
 	// Add a route
@@ -224,21 +162,16 @@ func TestRouterServeHTTP(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check that the handler was called
-	if !handlerCalled {
-		t.Error("Handler was not called")
-	}
+	assert.True(handlerCalled, "Handler was not called")
 
 	// Check the response
-	if w.Code != StatusOK {
-		t.Errorf("w.Code = %d, want %d", w.Code, StatusOK)
-	}
-	if w.Body.String() != "OK" {
-		t.Errorf("w.Body = %q, want %q", w.Body.String(), "OK")
-	}
+	assert.Equal(StatusOK, w.Code, "status code should be StatusOK")
+	assert.Equal("OK", w.Body.String(), "response body should be 'OK'")
 }
 
 // TestRouterServeHTTPWithParams tests the ServeHTTP method of Router with URL parameters
 func TestRouterServeHTTPWithParams(t *testing.T) {
+	assert := assert.New(t)
 	router := NewRouter()
 
 	// Add a route with parameters
@@ -260,21 +193,16 @@ func TestRouterServeHTTPWithParams(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check that the parameter was extracted
-	if paramValue != "123" {
-		t.Errorf("paramValue = %q, want %q", paramValue, "123")
-	}
+	assert.Equal("123", paramValue, "parameter value should be '123'")
 
 	// Check the response
-	if w.Code != StatusOK {
-		t.Errorf("w.Code = %d, want %d", w.Code, StatusOK)
-	}
-	if w.Body.String() != "User ID: 123" {
-		t.Errorf("w.Body = %q, want %q", w.Body.String(), "User ID: 123")
-	}
+	assert.Equal(StatusOK, w.Code, "status code should be StatusOK")
+	assert.Equal("User ID: 123", w.Body.String(), "response body should match")
 }
 
 // TestRouterServeHTTPNotFound tests the ServeHTTP method of Router with a non-existent route
 func TestRouterServeHTTPNotFound(t *testing.T) {
+	assert := assert.New(t)
 	router := NewRouter()
 
 	// Create a request for a non-existent route
@@ -289,16 +217,13 @@ func TestRouterServeHTTPNotFound(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check the response
-	if w.Code != StatusNotFound {
-		t.Errorf("w.Code = %d, want %d", w.Code, StatusNotFound)
-	}
-	if w.Body.String() != "404 page not found" {
-		t.Errorf("w.Body = %q, want %q", w.Body.String(), "404 page not found")
-	}
+	assert.Equal(StatusNotFound, w.Code, "status code should be StatusNotFound")
+	assert.Equal("404 page not found", w.Body.String(), "response body should match")
 }
 
 // TestRouterServeHTTPMethodNotAllowed tests the ServeHTTP method of Router with a method not allowed
 func TestRouterServeHTTPMethodNotAllowed(t *testing.T) {
+	assert := assert.New(t)
 	router := NewRouter()
 
 	// Add a route for GET
@@ -318,19 +243,14 @@ func TestRouterServeHTTPMethodNotAllowed(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check the response
-	if w.Code != StatusMethodNotAllowed {
-		t.Errorf("w.Code = %d, want %d", w.Code, StatusMethodNotAllowed)
-	}
-	if w.Body.String() != "Method Not Allowed" {
-		t.Errorf("w.Body = %q, want %q", w.Body.String(), "Method Not Allowed")
-	}
-	if w.Header().Get("Allow") != "GET" {
-		t.Errorf("w.Header().Get(\"Allow\") = %q, want %q", w.Header().Get("Allow"), "GET")
-	}
+	assert.Equal(StatusMethodNotAllowed, w.Code, "status code should be StatusMethodNotAllowed")
+	assert.Equal("Method Not Allowed", w.Body.String(), "response body should match")
+	assert.Equal("GET", w.Header().Get("Allow"), "Allow header should be GET")
 }
 
 // TestRouterServeHTTPWithMiddleware tests the ServeHTTP method of Router with middleware
 func TestRouterServeHTTPWithMiddleware(t *testing.T) {
+	assert := assert.New(t)
 	router := NewRouter()
 
 	// Add middleware
@@ -359,37 +279,27 @@ func TestRouterServeHTTPWithMiddleware(t *testing.T) {
 	ctx.Writer.Flush()
 
 	// Check that the middleware and handler were called
-	if !middlewareCalled {
-		t.Error("Middleware was not called")
-	}
-	if !handlerCalled {
-		t.Error("Handler was not called")
-	}
+	assert.True(middlewareCalled, "Middleware was not called")
+	assert.True(handlerCalled, "Handler was not called")
 
 	// Check the response
-	if w.Code != StatusOK {
-		t.Errorf("w.Code = %d, want %d", w.Code, StatusOK)
-	}
-	if w.Body.String() != "OK" {
-		t.Errorf("w.Body = %q, want %q", w.Body.String(), "OK")
-	}
+	assert.Equal(StatusOK, w.Code, "status code should be StatusOK")
+	assert.Equal("OK", w.Body.String(), "response body should match")
 }
 
 // TestMiddlewareStackPool tests the middlewareStackPool
 func TestMiddlewareStackPool(t *testing.T) {
+	assert := assert.New(t)
+
 	// Get a stack from the pool
 	stack := middlewareStackPool.Get().([]MiddlewareFunc)
-	if stack == nil {
-		t.Fatal("middlewareStackPool.Get() returned nil")
-	}
+	assert.NotNil(stack, "middlewareStackPool.Get() returned nil")
 
 	// Reset the stack to ensure it's empty
 	stack = stack[:0]
 
 	// Check that the stack is empty
-	if len(stack) != 0 {
-		t.Errorf("len(stack) = %d, want 0", len(stack))
-	}
+	assert.Empty(stack, "stack should be empty")
 
 	// Add a middleware function to the stack
 	middleware := func(c *Ctx) {
@@ -398,26 +308,20 @@ func TestMiddlewareStackPool(t *testing.T) {
 	stack = append(stack, middleware)
 
 	// Check that the middleware was added
-	if len(stack) != 1 {
-		t.Errorf("len(stack) = %d, want 1", len(stack))
-	}
+	assert.Len(stack, 1, "stack should have 1 middleware function")
 
 	// Put the stack back in the pool
 	middlewareStackPool.Put(stack)
 
 	// Get another stack from the pool (might be the same one)
 	stack2 := middlewareStackPool.Get().([]MiddlewareFunc)
-	if stack2 == nil {
-		t.Fatal("middlewareStackPool.Get() returned nil on second call")
-	}
+	assert.NotNil(stack2, "middlewareStackPool.Get() returned nil on second call")
 
 	// Reset the stack to ensure it's empty
 	stack2 = stack2[:0]
 
 	// Check that the stack is empty after resetting
-	if len(stack2) != 0 {
-		t.Errorf("len(stack2) = %d, want 0", len(stack2))
-	}
+	assert.Empty(stack2, "stack2 should be empty after resetting")
 
 	// Put the stack back in the pool
 	middlewareStackPool.Put(stack2)

@@ -3,6 +3,8 @@ package ngebut
 import (
 	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestNewHttpError tests the NewHttpError function
@@ -12,16 +14,10 @@ func TestNewHttpError(t *testing.T) {
 	message := "Bad request"
 	err := NewHttpError(code, message)
 
-	// Check that the fields are set correctly
-	if err.Code != code {
-		t.Errorf("err.Code = %d, want %d", err.Code, code)
-	}
-	if err.Message != message {
-		t.Errorf("err.Message = %q, want %q", err.Message, message)
-	}
-	if err.Err != nil {
-		t.Errorf("err.Err = %v, want nil", err.Err)
-	}
+	// Check that the fields are set correctly using testify
+	assert.Equal(t, code, err.Code, "err.Code should match expected value")
+	assert.Equal(t, message, err.Message, "err.Message should match expected value")
+	assert.Nil(t, err.Err, "err.Err should be nil")
 }
 
 // TestNewHttpErrorWithError tests the NewHttpErrorWithError function
@@ -32,16 +28,10 @@ func TestNewHttpErrorWithError(t *testing.T) {
 	originalErr := errors.New("database connection failed")
 	err := NewHttpErrorWithError(code, message, originalErr)
 
-	// Check that the fields are set correctly
-	if err.Code != code {
-		t.Errorf("err.Code = %d, want %d", err.Code, code)
-	}
-	if err.Message != message {
-		t.Errorf("err.Message = %q, want %q", err.Message, message)
-	}
-	if err.Err != originalErr {
-		t.Errorf("err.Err = %v, want %v", err.Err, originalErr)
-	}
+	// Check that the fields are set correctly using testify
+	assert.Equal(t, code, err.Code, "err.Code should match expected value")
+	assert.Equal(t, message, err.Message, "err.Message should match expected value")
+	assert.Equal(t, originalErr, err.Err, "err.Err should match original error")
 }
 
 // TestHttpErrorError tests the Error method of HttpError
@@ -49,33 +39,25 @@ func TestHttpErrorError(t *testing.T) {
 	// Test Error() with no underlying error
 	err1 := NewHttpError(StatusBadRequest, "Bad request")
 	expected1 := "Bad request"
-	if got := err1.Error(); got != expected1 {
-		t.Errorf("err1.Error() = %q, want %q", got, expected1)
-	}
+	assert.Equal(t, expected1, err1.Error(), "err1.Error() should return expected message")
 
 	// Test Error() with an underlying error
 	originalErr := errors.New("database connection failed")
 	err2 := NewHttpErrorWithError(StatusInternalServerError, "Internal server error", originalErr)
 	expected2 := "Internal server error: database connection failed"
-	if got := err2.Error(); got != expected2 {
-		t.Errorf("err2.Error() = %q, want %q", got, expected2)
-	}
+	assert.Equal(t, expected2, err2.Error(), "err2.Error() should return expected message with original error")
 }
 
 // TestHttpErrorUnwrap tests the Unwrap method of HttpError
 func TestHttpErrorUnwrap(t *testing.T) {
 	// Test Unwrap() with no underlying error
 	err1 := NewHttpError(StatusBadRequest, "Bad request")
-	if got := err1.Unwrap(); got != nil {
-		t.Errorf("err1.Unwrap() = %v, want nil", got)
-	}
+	assert.Nil(t, err1.Unwrap(), "err1.Unwrap() should return nil")
 
 	// Test Unwrap() with an underlying error
 	originalErr := errors.New("database connection failed")
 	err2 := NewHttpErrorWithError(StatusInternalServerError, "Internal server error", originalErr)
-	if got := err2.Unwrap(); got != originalErr {
-		t.Errorf("err2.Unwrap() = %v, want %v", got, originalErr)
-	}
+	assert.Equal(t, originalErr, err2.Unwrap(), "err2.Unwrap() should return original error")
 }
 
 // TestHttpErrorWithStandardErrors tests that HttpError works with standard error handling
@@ -85,16 +67,10 @@ func TestHttpErrorWithStandardErrors(t *testing.T) {
 	err := NewHttpErrorWithError(StatusInternalServerError, "Internal server error", originalErr)
 
 	// Test errors.Is
-	if !errors.Is(err, originalErr) {
-		t.Errorf("errors.Is(err, originalErr) = false, want true")
-	}
+	assert.True(t, errors.Is(err, originalErr), "errors.Is(err, originalErr) should be true")
 
 	// Test errors.As
 	var httpErr *HttpError
-	if !errors.As(err, &httpErr) {
-		t.Errorf("errors.As(err, &httpErr) = false, want true")
-	}
-	if httpErr != err {
-		t.Errorf("httpErr = %v, want %v", httpErr, err)
-	}
+	assert.True(t, errors.As(err, &httpErr), "errors.As(err, &httpErr) should be true")
+	assert.Equal(t, err, httpErr, "httpErr should equal err")
 }

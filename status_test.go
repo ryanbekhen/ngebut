@@ -2,6 +2,8 @@ package ngebut
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestStatusText tests the StatusText function
@@ -32,27 +34,17 @@ func TestStatusText(t *testing.T) {
 
 	for _, tc := range testCases {
 		got := StatusText(tc.code)
-		if got != tc.text {
-			t.Errorf("StatusText(%d) = %q, want %q", tc.code, got, tc.text)
-		}
+		assert.Equal(t, tc.text, got, "StatusText(%d) returned incorrect value", tc.code)
 	}
 }
 
 // TestStatusCodes tests that all status codes are defined correctly
 func TestStatusCodes(t *testing.T) {
 	// Test that status codes are defined with the correct values
-	if StatusOK != 200 {
-		t.Errorf("StatusOK = %d, want 200", StatusOK)
-	}
-	if StatusCreated != 201 {
-		t.Errorf("StatusCreated = %d, want 201", StatusCreated)
-	}
-	if StatusBadRequest != 400 {
-		t.Errorf("StatusBadRequest = %d, want 400", StatusBadRequest)
-	}
-	if StatusInternalServerError != 500 {
-		t.Errorf("StatusInternalServerError = %d, want 500", StatusInternalServerError)
-	}
+	assert.Equal(t, 200, StatusOK, "StatusOK should be 200")
+	assert.Equal(t, 201, StatusCreated, "StatusCreated should be 201")
+	assert.Equal(t, 400, StatusBadRequest, "StatusBadRequest should be 400")
+	assert.Equal(t, 500, StatusInternalServerError, "StatusInternalServerError should be 500")
 
 	// Test that all status codes have a corresponding text
 	// This ensures that StatusText handles all defined status codes
@@ -77,63 +69,36 @@ func TestStatusCodes(t *testing.T) {
 	}
 
 	for _, code := range statusCodes {
-		if text := StatusText(code); text == "" {
-			t.Errorf("StatusText(%d) returned empty string, expected a description", code)
-		}
+		text := StatusText(code)
+		assert.NotEmpty(t, text, "StatusText(%d) returned empty string, expected a description", code)
 	}
 }
 
 // TestHTTPMethods tests that all HTTP methods are defined correctly
 func TestHTTPMethods(t *testing.T) {
 	// Test that HTTP methods are defined with the correct values
-	if MethodGet != "GET" {
-		t.Errorf("MethodGet = %q, want \"GET\"", MethodGet)
-	}
-	if MethodPost != "POST" {
-		t.Errorf("MethodPost = %q, want \"POST\"", MethodPost)
-	}
-	if MethodPut != "PUT" {
-		t.Errorf("MethodPut = %q, want \"PUT\"", MethodPut)
-	}
-	if MethodDelete != "DELETE" {
-		t.Errorf("MethodDelete = %q, want \"DELETE\"", MethodDelete)
-	}
-	if MethodPatch != "PATCH" {
-		t.Errorf("MethodPatch = %q, want \"PATCH\"", MethodPatch)
-	}
-	if MethodHead != "HEAD" {
-		t.Errorf("MethodHead = %q, want \"HEAD\"", MethodHead)
-	}
-	if MethodOptions != "OPTIONS" {
-		t.Errorf("MethodOptions = %q, want \"OPTIONS\"", MethodOptions)
-	}
-	if MethodConnect != "CONNECT" {
-		t.Errorf("MethodConnect = %q, want \"CONNECT\"", MethodConnect)
-	}
-	if MethodTrace != "TRACE" {
-		t.Errorf("MethodTrace = %q, want \"TRACE\"", MethodTrace)
-	}
+	assert.Equal(t, "GET", MethodGet, "MethodGet should be \"GET\"")
+	assert.Equal(t, "POST", MethodPost, "MethodPost should be \"POST\"")
+	assert.Equal(t, "PUT", MethodPut, "MethodPut should be \"PUT\"")
+	assert.Equal(t, "DELETE", MethodDelete, "MethodDelete should be \"DELETE\"")
+	assert.Equal(t, "PATCH", MethodPatch, "MethodPatch should be \"PATCH\"")
+	assert.Equal(t, "HEAD", MethodHead, "MethodHead should be \"HEAD\"")
+	assert.Equal(t, "OPTIONS", MethodOptions, "MethodOptions should be \"OPTIONS\"")
+	assert.Equal(t, "CONNECT", MethodConnect, "MethodConnect should be \"CONNECT\"")
+	assert.Equal(t, "TRACE", MethodTrace, "MethodTrace should be \"TRACE\"")
 }
 
 // TestStatusTextEdgeCases tests edge cases for the StatusText function
 func TestStatusTextEdgeCases(t *testing.T) {
 	// Test negative status code
-	if text := StatusText(-1); text != "" {
-		t.Errorf("StatusText(-1) = %q, want \"\"", text)
-	}
+	assert.Empty(t, StatusText(-1), "StatusText(-1) should return empty string")
 
 	// Test zero status code
-	if text := StatusText(0); text != "" {
-		t.Errorf("StatusText(0) = %q, want \"\"", text)
-	}
+	assert.Empty(t, StatusText(0), "StatusText(0) should return empty string")
 
 	// Test status code 306 (unused)
-	if text := StatusText(306); text != "" {
-		t.Errorf("StatusText(306) = %q, want \"\"", text)
-	}
+	assert.Empty(t, StatusText(306), "StatusText(306) should return empty string")
 
 	// Test very large status code
-	if text := StatusText(9999); text != "" {
-		t.Errorf("StatusText(9999) = %q, want \"\"", text)
-	}
+	assert.Empty(t, StatusText(9999), "StatusText(9999) should return empty string")
 }

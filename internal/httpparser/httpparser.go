@@ -543,9 +543,6 @@ var (
 	// contentLengthBytes is the byte representation of "Content-Length" header name
 	contentLengthBytes = []byte("Content-Length")
 
-	// serverHeader is the Server header value
-	serverHeader = []byte("Server: ngebut\r\n")
-
 	// httpVersion is the HTTP version string
 	httpVersion = []byte("HTTP/1.1 ")
 
@@ -655,9 +652,6 @@ func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
 
 	// Add Date header - use cached version to avoid expensive time formatting
 	buf = append(buf, getDateHeader()...)
-
-	// Add Server header
-	buf = append(buf, serverHeader...)
 
 	// Fast path for empty headers (common case)
 	if len(header) == 0 {

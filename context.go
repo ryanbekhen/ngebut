@@ -17,7 +17,6 @@ type Ctx struct {
 	Writer     ResponseWriter
 	Request    *Request
 	statusCode int
-	header     Header
 	body       []byte
 	err        error
 	userData   map[string]interface{}
@@ -33,7 +32,6 @@ var contextPool = sync.Pool{
 	New: func() interface{} {
 		return &Ctx{
 			statusCode:      StatusOK,
-			header:          make(Header),
 			body:            make([]byte, 0, 512),
 			err:             nil,
 			middlewareStack: make([]MiddlewareFunc, 0),
@@ -68,15 +66,15 @@ func (c *Ctx) copyHeadersToWriter() {
 		}
 
 		// Check if this header is already in the context
-		if _, exists := c.header[key]; !exists && len(values) > 0 {
+		if _, exists := c.Request.Header[key]; !exists && len(values) > 0 {
 			// Copy the values directly to avoid allocations
-			c.header[key] = values
+			c.Request.Header[key] = values
 		}
 	}
 
 	// Now copy all headers from the context to the writer
 	// This will include both original context headers and those we just copied from the writer
-	for key, values := range c.header {
+	for key, values := range c.Request.Header {
 		if len(values) == 0 {
 			continue
 		}
@@ -193,7 +191,7 @@ func getContextFromRequest(w http.ResponseWriter, r *Request) *Ctx {
 
 	// Use headers directly without copying for zero-allocation
 	if w != nil && w.Header() != nil {
-		ctx.header = Header(w.Header())
+		ctx.Request.Header = Header(w.Header())
 	}
 
 	return ctx
@@ -211,8 +209,8 @@ func ReleaseContext(ctx *Ctx) {
 	ctx.statusCode = StatusOK
 	ctx.err = nil
 
-	for k := range ctx.header {
-		delete(ctx.header, k)
+	for k := range ctx.Request.Header {
+		delete(ctx.Request.Header, k)
 	}
 
 	ctx.body = ctx.body[:0]
@@ -245,7 +243,7 @@ func (c *Ctx) StatusCode() int {
 // Returns:
 //   - The Header object containing all response headers
 func (c *Ctx) Header() Header {
-	return c.header
+	return c.Request.Header
 }
 
 // Method returns the HTTP method of the request (e.g., GET, POST, PUT).
@@ -282,8 +280,13 @@ func (c *Ctx) Path() string {
 // Returns:
 //   - The client's IP address as a string, or empty string if not determinable
 func (c *Ctx) IP() string {
+	// Check if Request is nil
+	if c.Request == nil {
+		return ""
+	}
+
 	// Check for X-Forwarded-For header first (for clients behind proxies)
-	if xff := c.Get("X-Forwarded-For"); xff != "" {
+	if xff := c.Request.Header.Get("X-Forwarded-For"); xff != "" {
 		// X-Forwarded-For can contain multiple IPs, the first one is the original client
 		// Find the first comma or end of string to extract the first IP
 		commaIdx := strings.IndexByte(xff, ',')
@@ -302,7 +305,7 @@ func (c *Ctx) IP() string {
 	}
 
 	// Check for X-Real-IP header next
-	if xrip := c.Get("X-Real-Ip"); xrip != "" {
+	if xrip := c.Request.Header.Get("X-Real-Ip"); xrip != "" {
 		return xrip
 	}
 
@@ -326,14 +329,10 @@ func (c *Ctx) IP() string {
 // Returns:
 //   - The remote IP address as a string, or empty string if not available
 func (c *Ctx) RemoteAddr() string {
-	if c.Request.RemoteAddr != "" {
-		ip, _, err := net.SplitHostPort(c.Request.RemoteAddr)
-		if err == nil {
-			return ip
-		}
-		return c.Request.RemoteAddr
+	if c.Request == nil {
+		return ""
 	}
-	return ""
+	return c.Request.RemoteAddr
 }
 
 // UserAgent returns the value of the "User-Agent" header from the request,
@@ -360,17 +359,22 @@ func (c *Ctx) Host() string {
 		return ""
 	}
 
-	// Use the Host header if available, otherwise fall back to the URL host
-	if host := c.Request.Header.Get("Host"); host != "" {
+	// Check for X-Forwarded-Host header first
+	if host := c.Request.Header.Get("X-Forwarded-Host"); host != "" {
 		return host
 	}
 
-	// Fallback to the URL host if Host header is not set
+	// Use the Host field if available
+	if c.Request.Host != "" {
+		return c.Request.Host
+	}
+
+	// Fallback to the URL host if Host is not set
 	return c.Request.URL.Host
 }
 
 // Protocol retrieves the protocol scheme (e.g., "http" or "https") from the request.
-// It first checks the URL.Scheme, then looks at the X-Forwarded-Proto header,
+// It first checks proxy headers like X-Forwarded-Proto, then falls back to URL.Scheme,
 // and finally determines based on TLS connection status.
 // Returns "http" as default if the protocol cannot be determined.
 func (c *Ctx) Protocol() string {
@@ -378,12 +382,7 @@ func (c *Ctx) Protocol() string {
 		return ""
 	}
 
-	// First check if URL.Scheme is already set
-	if c.Request.URL.Scheme != "" {
-		return c.Request.URL.Scheme
-	}
-
-	// Check X-Forwarded-Proto header (common for proxies)
+	// Check X-Forwarded-Proto header first (common for proxies)
 	if proto := c.Request.Header.Get("X-Forwarded-Proto"); proto != "" {
 		return proto
 	}
@@ -401,6 +400,11 @@ func (c *Ctx) Protocol() string {
 	// Check X-Forwarded-Ssl header
 	if c.Request.Header.Get("X-Forwarded-Ssl") == "on" {
 		return "https"
+	}
+
+	// Fall back to URL.Scheme if set
+	if c.Request.URL.Scheme != "" {
+		return c.Request.URL.Scheme
 	}
 
 	// Default to http
@@ -430,7 +434,7 @@ func (c *Ctx) Status(code int) *Ctx {
 // Returns:
 //   - The context itself for method chaining
 func (c *Ctx) Set(key, value string) *Ctx {
-	c.header.Set(key, value)
+	c.Request.Header.Set(key, value)
 	if c.Writer != nil {
 		c.Writer.Header().Set(key, value)
 	}
@@ -445,7 +449,7 @@ func (c *Ctx) Set(key, value string) *Ctx {
 // Returns:
 //   - The header value as a string, or empty string if not found
 func (c *Ctx) Get(key string) string {
-	return c.header.Get(key)
+	return c.Request.Header.Get(key)
 }
 
 // Param retrieves a URL path parameter value by its key.
@@ -485,6 +489,9 @@ func (c *Ctx) Param(key string) string {
 // Returns:
 //   - The query parameter value as a string, or empty string if not found
 func (c *Ctx) Query(key string) string {
+	if c.Request == nil {
+		return ""
+	}
 	return c.Request.URL.Query().Get(key)
 }
 
@@ -497,6 +504,9 @@ func (c *Ctx) Query(key string) string {
 // Returns:
 //   - A slice of strings containing all values for the parameter, or an empty slice if not found
 func (c *Ctx) QueryArray(key string) []string {
+	if c.Request == nil {
+		return []string{}
+	}
 	return c.Request.URL.Query()[key]
 }
 
@@ -592,24 +602,19 @@ func (c *Ctx) JSON(obj interface{}) {
 	c.copyHeadersToWriter()
 	c.Writer.WriteHeader(c.statusCode)
 
-	// Get buffer from pool
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	defer bufferPool.Put(buf)
-
-	// Use faster JSON encoding
-	if err := json.NewEncoder(buf).Encode(obj); err != nil {
+	// Use json.Marshal which doesn't add a newline character
+	data, err := json.Marshal(obj)
+	if err != nil {
 		c.Error(fmt.Errorf("JSON encoding error: %w", err))
 		return
 	}
 
-	if cap(c.body) < len(buf.Bytes()) {
-		newCap := len(buf.Bytes()) * 2
+	if cap(c.body) < len(data) {
+		newCap := len(data) * 2
 		c.body = make([]byte, 0, newCap)
 	}
 
-	// Get bytes and reuse
-	data := buf.Bytes()
+	// Store in context body
 	c.body = c.body[:0]
 	c.body = append(c.body, data...)
 
