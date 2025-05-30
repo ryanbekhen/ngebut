@@ -390,6 +390,13 @@ func (c *Ctx) Cookies(name string) string {
 	return cookies[name]
 }
 
+// ClearCookies removes all cookies for the context by setting an empty Set-Cookie header.
+func (c *Ctx) ClearCookies() *Ctx {
+	// Clear all cookies by setting an empty Set-Cookie header
+	c.Set("Set-Cookie", "")
+	return c
+}
+
 // String sends a plain text response with the given format and values.
 // It sets the Content-Type header to "text/plain; charset=utf-8".
 // If values are provided, it formats the string using fmt.Sprintf.
