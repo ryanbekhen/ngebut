@@ -515,14 +515,18 @@ func (c *Ctx) JSON(obj interface{}) {
 		return
 	}
 
-	// Get bytes once and reuse
-	bytes := buf.Bytes()
+	if cap(c.body) < len(buf.Bytes()) {
+		newCap := len(buf.Bytes()) * 2
+		c.body = make([]byte, 0, newCap)
+	}
 
-	// Store in context body
-	c.body = append(c.body[:0], bytes...)
+	// Get bytes and reuse
+	data := buf.Bytes()
+	c.body = c.body[:0]
+	c.body = append(c.body, data...)
 
 	// Write response
-	_, _ = c.Writer.Write(bytes)
+	_, _ = c.Writer.Write(data)
 }
 
 // HTML sends an HTML response with the provided content.
