@@ -511,6 +511,12 @@ func (hc *Codec) GetContentLength() int {
 func (hc *Codec) ResetParser() {
 	// Reset content length
 	hc.ContentLength = -1
+
+	// Return the current parser to the pool and get a new one
+	if hc.Parser != nil {
+		parserPool.Put(hc.Parser)
+	}
+	hc.Parser = parserPool.Get().(*wildcat.HTTPParser)
 }
 
 // Reset resets the HTTP codec.

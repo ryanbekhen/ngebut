@@ -1,12 +1,15 @@
 package ngebut
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"github.com/ryanbekhen/ngebut/internal/httpparser"
 	"github.com/ryanbekhen/ngebut/log"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/evanphx/wildcat"
 	"github.com/panjf2000/gnet/v2"
@@ -36,6 +39,10 @@ type httpServer struct {
 	router       *Router
 	eng          gnet.Engine
 	errorHandler Handler // Handler called when an error occurs during request processing
+
+	readTimeout  time.Duration // Read timeout for requests
+	writeTimeout time.Duration // Write timeout for responses
+	idleTimeout  time.Duration // Idle timeout for connections
 }
 
 // defaultErrorHandler is the default handler for errors.
@@ -78,6 +85,9 @@ func New(config ...Config) *Server {
 		multicore:    true,
 		router:       r,
 		errorHandler: cfg.ErrorHandler,
+		readTimeout:  cfg.ReadTimeout,
+		writeTimeout: cfg.WriteTimeout,
+		idleTimeout:  cfg.IdleTimeout,
 	}
 
 	return &Server{
@@ -155,7 +165,38 @@ func (hs *httpServer) OnTraffic(c gnet.Conn) gnet.Action {
 
 		// Break early if we can't parse any more data
 		if err != nil {
-			logger.Error().Err(err).Msg("parse error")
+			// Don't log parse errors for normal HTTP requests
+			// This prevents log spam when clients send valid requests that result in 405 responses
+
+			// For form submissions that might be causing issues, send a 400 Bad Request response
+			contentType := ""
+			if processed+8 < n {
+				// Look for Content-Type header in the buffer
+				contentTypeIndex := bytes.Index(buf[processed:], []byte("Content-Type:"))
+				if contentTypeIndex != -1 {
+					endIndex := bytes.Index(buf[processed+contentTypeIndex:], []byte("\r\n"))
+					if endIndex != -1 && endIndex < 100 { // Limit search to avoid buffer overruns
+						contentType = string(buf[processed+contentTypeIndex+13 : processed+contentTypeIndex+endIndex])
+						contentType = strings.TrimSpace(contentType)
+					}
+				}
+			}
+
+			// If this looks like a form submission, send a more helpful response
+			if strings.Contains(contentType, "multipart/form-data") ||
+				strings.Contains(contentType, "application/x-www-form-urlencoded") {
+				parserHeaders := getParserHeaders()
+				defer releaseParserHeaders(parserHeaders)
+				errorMsg := []byte("Bad Request: Form data could not be processed. Please check your form submission.")
+				hc.WriteResponse(http.StatusBadRequest, parserHeaders, errorMsg)
+				c.Write(hc.Buf)
+			}
+
+			// Discard at least 1 byte to avoid getting stuck in a loop
+			// This ensures we make progress even if we can't parse the request
+			if processed < n {
+				processed++
+			}
 			break
 		}
 
@@ -171,7 +212,11 @@ func (hs *httpServer) OnTraffic(c gnet.Conn) gnet.Action {
 		// Parse the HTTP request
 		httpReq, err := http.ReadRequest(reader)
 		if err != nil {
-			logger.Error().Err(err).Msg("error reading request")
+			// Discard at least 1 byte to avoid getting stuck in a loop
+			// This ensures we make progress even if we can't parse the request
+			if processed < n {
+				processed++
+			}
 			break
 		}
 
@@ -194,6 +239,11 @@ func (hs *httpServer) OnTraffic(c gnet.Conn) gnet.Action {
 
 		// If there's no more data to process, break
 		if nextOffset == 0 {
+			// Discard at least 1 byte to avoid getting stuck in a loop
+			// This ensures we make progress even if we can't parse the request
+			if processed < n {
+				processed++
+			}
 			break
 		}
 	}
@@ -401,6 +451,10 @@ func (s *Server) Listen(addr string) error {
 		gnet.WithReuseAddr(true),
 		gnet.WithReusePort(true),
 		gnet.WithLogger(&noopLogger{}),
+		gnet.WithTCPNoDelay(gnet.TCPNoDelay),
+		gnet.WithTCPKeepAlive(s.httpServer.idleTimeout),
+		gnet.WithReadBufferCap(int(s.httpServer.readTimeout.Seconds())*1024),
+		gnet.WithWriteBufferCap(int(s.httpServer.writeTimeout.Seconds())*1024),
 	)
 }
 
