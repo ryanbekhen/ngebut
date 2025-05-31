@@ -91,14 +91,14 @@ func TestHTTPMethods(t *testing.T) {
 // TestStatusTextEdgeCases tests edge cases for the StatusText function
 func TestStatusTextEdgeCases(t *testing.T) {
 	// Test negative status code
-	assert.Empty(t, StatusText(-1), "StatusText(-1) should return empty string")
+	assert.Equal(t, StatusText(-1), "Unknown Status Code")
 
 	// Test zero status code
-	assert.Empty(t, StatusText(0), "StatusText(0) should return empty string")
+	assert.Equal(t, StatusText(0), "Unknown Status Code")
 
 	// Test status code 306 (unused)
-	assert.Empty(t, StatusText(306), "StatusText(306) should return empty string")
+	assert.Equal(t, StatusText(306), "Unknown Status Code")
 
 	// Test very large status code
-	assert.Empty(t, StatusText(9999), "StatusText(9999) should return empty string")
+	assert.Equal(t, StatusText(9999), "Unknown Status Code")
 }
