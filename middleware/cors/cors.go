@@ -35,21 +35,22 @@ type Config struct {
 	MaxAge int
 }
 
+// Pre-defined constants to avoid string allocations
+const (
+	wildcard       = "*"
+	originHeader   = "Origin"
+	trueValue      = "true"
+	defaultMethods = "GET,POST,PUT,DELETE,HEAD,OPTIONS,PATCH"
+	emptyString    = ""
+)
+
 // DefaultConfig returns the default configuration for the CORS middleware.
 func DefaultConfig() Config {
 	return Config{
-		AllowOrigins: "*",
-		AllowMethods: strings.Join([]string{
-			ngebut.MethodGet,
-			ngebut.MethodPost,
-			ngebut.MethodPut,
-			ngebut.MethodDelete,
-			ngebut.MethodHead,
-			ngebut.MethodOptions,
-			ngebut.MethodPatch,
-		}, ","),
-		AllowHeaders:     "",
-		ExposeHeaders:    "",
+		AllowOrigins:     wildcard,
+		AllowMethods:     defaultMethods,
+		AllowHeaders:     emptyString,
+		ExposeHeaders:    emptyString,
 		AllowCredentials: false,
 		MaxAge:           0,
 	}
@@ -65,11 +66,37 @@ func New(config ...Config) ngebut.Middleware {
 		cfg = config[0]
 	}
 
-	// Store the config values for easier access
+	// Pre-compute and store config values
 	allowOrigins := cfg.AllowOrigins
 	allowMethods := cfg.AllowMethods
 	allowHeaders := cfg.AllowHeaders
 	exposeHeaders := cfg.ExposeHeaders
+	allowCredentials := cfg.AllowCredentials
+	maxAge := cfg.MaxAge
+
+	// Pre-compute max age string if needed
+	var maxAgeStr string
+	if maxAge > 0 {
+		maxAgeStr = strconv.Itoa(maxAge)
+	}
+
+	// Pre-compute credentials string if needed
+	var credentialsStr string
+	if allowCredentials {
+		credentialsStr = trueValue
+	}
+
+	// Pre-process origins for faster lookup
+	isWildcardOrigin := allowOrigins == wildcard
+	var originsMap map[string]struct{}
+
+	// Only create the map if we're not using wildcard origins
+	if !isWildcardOrigin {
+		originsMap = make(map[string]struct{})
+		for _, origin := range strings.Split(allowOrigins, ",") {
+			originsMap[strings.TrimSpace(origin)] = struct{}{}
+		}
+	}
 
 	// Return the middleware function
 	return func(c *ngebut.Ctx) {
@@ -77,34 +104,26 @@ func New(config ...Config) ngebut.Middleware {
 		origin := c.Get(ngebut.HeaderOrigin)
 
 		// Skip if no Origin header is present
-		if origin == "" {
+		if origin == emptyString {
 			c.Next()
 			return
 		}
 
-		// Check if the origin is allowed
-		allowOrigin := ""
-		if allowOrigins == "*" {
-			allowOrigin = "*"
+		// Fast path for wildcard origin
+		if isWildcardOrigin {
+			c.Set(ngebut.HeaderAccessControlAllowOrigin, wildcard)
 		} else {
-			// Check if the request Origin is in the list of allowed origins
-			// Split the comma-separated list of allowed origins
-			origins := strings.Split(allowOrigins, ",")
-			for _, o := range origins {
-				o = strings.TrimSpace(o)
-				if o == origin || o == "*" {
-					allowOrigin = origin
-					break
-				}
+			// Check if the origin is allowed using map lookup (O(1) operation)
+			_, originAllowed := originsMap[origin]
+			_, wildcardAllowed := originsMap[wildcard]
+
+			if originAllowed || wildcardAllowed {
+				c.Set(ngebut.HeaderAccessControlAllowOrigin, origin)
+				c.Set(ngebut.HeaderVary, originHeader)
+			} else {
+				// Origin not allowed, but still set Vary header
+				c.Set(ngebut.HeaderVary, originHeader)
 			}
-		}
-
-		// Set CORS headers
-		c.Set(ngebut.HeaderAccessControlAllowOrigin, allowOrigin)
-
-		// Set Vary header if not using wildcard origin
-		if allowOrigin != "*" {
-			c.Set(ngebut.HeaderVary, "Origin")
 		}
 
 		// Handle preflight OPTIONS request
@@ -112,25 +131,25 @@ func New(config ...Config) ngebut.Middleware {
 			// Set preflight headers
 			c.Set(ngebut.HeaderAccessControlAllowMethods, allowMethods)
 
-			// Set Allow-Headers header if specified
-			if cfg.AllowHeaders != "" {
+			// Set Allow-Headers header
+			if allowHeaders != emptyString {
 				c.Set(ngebut.HeaderAccessControlAllowHeaders, allowHeaders)
 			} else {
-				// If no allowed headers are specified, mirror the requested headers
+				// Mirror the requested headers if no allowed headers are specified
 				requestHeaders := c.Get(ngebut.HeaderAccessControlRequestHeaders)
-				if requestHeaders != "" {
+				if requestHeaders != emptyString {
 					c.Set(ngebut.HeaderAccessControlAllowHeaders, requestHeaders)
 				}
 			}
 
 			// Set Allow-Credentials header if specified
-			if cfg.AllowCredentials {
-				c.Set(ngebut.HeaderAccessControlAllowCredentials, "true")
+			if allowCredentials {
+				c.Set(ngebut.HeaderAccessControlAllowCredentials, credentialsStr)
 			}
 
 			// Set Max-Age header if specified
-			if cfg.MaxAge > 0 {
-				c.Set(ngebut.HeaderAccessControlMaxAge, strconv.Itoa(cfg.MaxAge))
+			if maxAge > 0 {
+				c.Set(ngebut.HeaderAccessControlMaxAge, maxAgeStr)
 			}
 
 			// Respond with 204 No Content for preflight requests
@@ -141,13 +160,13 @@ func New(config ...Config) ngebut.Middleware {
 		// For non-OPTIONS requests
 
 		// Set Expose-Headers header if specified
-		if cfg.ExposeHeaders != "" {
+		if exposeHeaders != emptyString {
 			c.Set(ngebut.HeaderAccessControlExposeHeaders, exposeHeaders)
 		}
 
 		// Set Allow-Credentials header if specified
-		if cfg.AllowCredentials {
-			c.Set(ngebut.HeaderAccessControlAllowCredentials, "true")
+		if allowCredentials {
+			c.Set(ngebut.HeaderAccessControlAllowCredentials, credentialsStr)
 		}
 
 		// Continue processing the request
