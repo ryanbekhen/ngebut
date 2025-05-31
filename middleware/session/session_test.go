@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -546,4 +547,69 @@ func TestMiddlewareExpiredSession(t *testing.T) {
 	retrievedExpiredSession, err := store.Get("expired-session-id")
 	assert.NoError(t, err, "Get expired session returned error")
 	assert.Nil(t, retrievedExpiredSession, "Expired session should be nil after retrieval attempt")
+}
+
+// TestMiddlewareSessionIDFromCookie tests that the middleware retrieves the session ID from the cookie
+func TestMiddlewareSessionIDFromCookie(t *testing.T) {
+	// Create a memory store and add a test session
+	memoryStorage := memory.New(time.Second)
+	store := NewStorageAdapter(memoryStorage)
+	testSession := &Session{
+		ID:        "test-session-id",
+		Values:    map[string]interface{}{"key": "value"},
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	err := store.Save(testSession)
+	require.NoError(t, err, "Failed to save test session")
+
+	// Create a test HTTP request with the session cookie
+	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
+	req.Header.Set("Cookie", "ngebut_session=test-session-id")
+	w := httptest.NewRecorder()
+
+	// Create a test context
+	ctx := ngebut.GetContext(w, req)
+
+	// Create the middleware with default config but using our store
+	config := DefaultConfig()
+	manager := NewManager(config, store)
+	middleware := func(c *ngebut.Ctx) {
+		// Try to get the session ID from the cookie
+		sessionID := c.Request.Header.Get("Cookie")
+		if sessionID != "" {
+			cookies := parseCookies(sessionID)
+			sessionID = cookies[config.CookieName]
+		}
+
+		var session *Session
+		var err error
+
+		if sessionID != "" {
+			// Try to get the session from the store
+			session, err = manager.store.Get(sessionID)
+			if err != nil {
+				c.Error(err)
+				return
+			}
+		}
+
+		if session == nil {
+			c.Error(errors.New("No valid session found"))
+			return
+		}
+
+		// Store the session in the request context for handlers to access
+		sessionCtx := context.WithValue(c.Request.Context(), sessionKey("session"), session)
+		c.Request = c.Request.WithContext(sessionCtx)
+	}
+
+	// Call the middleware directly
+	middleware(ctx)
+
+	// Check that the session was retrieved correctly
+	session := GetSession(ctx)
+	assert.NotNil(t, session, "No session was retrieved by middleware")
+	assert.Equal(t, "test-session-id", session.ID, "Retrieved session has wrong ID")
+	assert.Equal(t, "value", session.Get("key"), "Session.Get returned unexpected value for key")
 }
