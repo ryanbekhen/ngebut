@@ -29,7 +29,7 @@ func TestStatusText(t *testing.T) {
 		{StatusServiceUnavailable, "Service Unavailable"},
 		{StatusGatewayTimeout, "Gateway Timeout"},
 		// Test a non-standard status code
-		{999, ""},
+		{999, "Unknown Status Code"},
 	}
 
 	for _, tc := range testCases {
