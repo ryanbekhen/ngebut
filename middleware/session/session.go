@@ -355,7 +355,7 @@ func (m *Manager) Get(c *ngebut.Ctx) (*Session, error) {
 	switch m.config.source {
 	case "cookie":
 		// Try to get the session ID from the cookie
-		cookieHeader := c.Request.Header.Get("Cookie")
+		cookieHeader := c.Request.Header.Get(ngebut.HeaderCookie)
 		if cookieHeader != "" {
 			cookies := parseCookies(cookieHeader)
 			sessionID = cookies[m.config.sessionName]
@@ -372,7 +372,7 @@ func (m *Manager) Get(c *ngebut.Ctx) (*Session, error) {
 		sessionID = c.Request.URL.Query().Get(m.config.sessionName)
 	default:
 		// Default to cookie if source is invalid
-		cookieHeader := c.Request.Header.Get("Cookie")
+		cookieHeader := c.Request.Header.Get(ngebut.HeaderCookie)
 		if cookieHeader != "" {
 			cookies := parseCookies(cookieHeader)
 			sessionID = cookies[m.config.sessionName]
@@ -445,7 +445,7 @@ func (m *Manager) GetOrCreate(c *ngebut.Ctx) (*Session, error) {
 	switch m.config.source {
 	case "cookie":
 		// Try to get the session ID from the cookie
-		cookieHeader := c.Request.Header.Get("Cookie")
+		cookieHeader := c.Request.Header.Get(ngebut.HeaderCookie)
 		if cookieHeader != "" {
 			cookies := parseCookies(cookieHeader)
 			sessionID = cookies[m.config.sessionName]
@@ -462,7 +462,7 @@ func (m *Manager) GetOrCreate(c *ngebut.Ctx) (*Session, error) {
 		sessionID = c.Request.URL.Query().Get(m.config.sessionName)
 	default:
 		// Default to cookie if source is invalid
-		cookieHeader := c.Request.Header.Get("Cookie")
+		cookieHeader := c.Request.Header.Get(ngebut.HeaderCookie)
 		if cookieHeader != "" {
 			cookies := parseCookies(cookieHeader)
 			sessionID = cookies[m.config.sessionName]
