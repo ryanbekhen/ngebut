@@ -77,7 +77,7 @@ const (
 	StatusNetworkAuthenticationRequired = 511 // RFC 6585, 6
 )
 
-// HTTP status codes were stolen from valyala/fasthttp
+// HTTP status codes were borrowed from valyala/fasthttp
 var (
 	unknownStatusCode = "Unknown Status Code"
 

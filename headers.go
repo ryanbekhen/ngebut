@@ -1,6 +1,6 @@
 package ngebut
 
-// Headers were stolen from valyala/fasthttp
+// Headers were borrowed from valyala/fasthttp
 const (
 	// Authentication.
 	HeaderAuthorization      = "Authorization"
