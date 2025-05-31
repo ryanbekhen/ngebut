@@ -355,15 +355,7 @@ func (m *Manager) Get(c *ngebut.Ctx) (*Session, error) {
 	switch m.config.source {
 	case "cookie":
 		// Try to get the session ID from the cookie
-		cookieHeader := getSessionIDFromCookie(c)
-		if cookieHeader != "" {
-			cookies := parseCookies(cookieHeader)
-			sessionID = cookies[m.config.sessionName]
-			// For backward compatibility
-			if sessionID == "" && m.config.CookieName != "" {
-				sessionID = cookies[m.config.CookieName]
-			}
-		}
+		getSessionIDFromCookie(c, &m.config, &sessionID)
 	case "header":
 		// Try to get the session ID from the header
 		sessionID = c.Request.Header.Get(m.config.sessionName)
@@ -372,15 +364,7 @@ func (m *Manager) Get(c *ngebut.Ctx) (*Session, error) {
 		sessionID = c.Request.URL.Query().Get(m.config.sessionName)
 	default:
 		// Default to cookie if source is invalid
-		cookieHeader := getSessionIDFromCookie(c)
-		if cookieHeader != "" {
-			cookies := parseCookies(cookieHeader)
-			sessionID = cookies[m.config.sessionName]
-			// For backward compatibility
-			if sessionID == "" && m.config.CookieName != "" {
-				sessionID = cookies[m.config.CookieName]
-			}
-		}
+		getSessionIDFromCookie(c, &m.config, &sessionID)
 	}
 
 	var session *Session
@@ -445,15 +429,7 @@ func (m *Manager) GetOrCreate(c *ngebut.Ctx) (*Session, error) {
 	switch m.config.source {
 	case "cookie":
 		// Try to get the session ID from the cookie
-		cookieHeader := getSessionIDFromCookie(c)
-		if cookieHeader != "" {
-			cookies := parseCookies(cookieHeader)
-			sessionID = cookies[m.config.sessionName]
-			// For backward compatibility
-			if sessionID == "" && m.config.CookieName != "" {
-				sessionID = cookies[m.config.CookieName]
-			}
-		}
+		getSessionIDFromCookie(c, &m.config, &sessionID)
 	case "header":
 		// Try to get the session ID from the header
 		sessionID = c.Request.Header.Get(m.config.sessionName)
@@ -462,15 +438,7 @@ func (m *Manager) GetOrCreate(c *ngebut.Ctx) (*Session, error) {
 		sessionID = c.Request.URL.Query().Get(m.config.sessionName)
 	default:
 		// Default to cookie if source is invalid
-		cookieHeader := getSessionIDFromCookie(c)
-		if cookieHeader != "" {
-			cookies := parseCookies(cookieHeader)
-			sessionID = cookies[m.config.sessionName]
-			// For backward compatibility
-			if sessionID == "" && m.config.CookieName != "" {
-				sessionID = cookies[m.config.CookieName]
-			}
-		}
+		getSessionIDFromCookie(c, &m.config, &sessionID)
 	}
 
 	var session *Session
