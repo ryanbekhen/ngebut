@@ -60,27 +60,27 @@ func (c *Ctx) copyHeadersToWriter() {
 
 	// First, copy any headers from the writer that aren't in the context
 	// This is typically needed for headers set by middleware after c.Next()
-	for key, values := range writerHeader {
+	for key, values := range *writerHeader {
 		if len(values) == 0 {
 			continue
 		}
 
 		// Check if this header is already in the context
-		if _, exists := c.Request.Header[key]; !exists && len(values) > 0 {
+		if _, exists := (*c.Request.Header)[key]; !exists && len(values) > 0 {
 			// Copy the values directly to avoid allocations
-			c.Request.Header[key] = values
+			(*c.Request.Header)[key] = values
 		}
 	}
 
 	// Now copy all headers from the context to the writer
 	// This will include both original context headers and those we just copied from the writer
-	for key, values := range c.Request.Header {
+	for key, values := range *c.Request.Header {
 		if len(values) == 0 {
 			continue
 		}
 
 		// Set all values at once to avoid multiple map lookups
-		writerHeader[key] = values
+		(*writerHeader)[key] = values
 	}
 }
 
@@ -189,9 +189,9 @@ func getContextFromRequest(w http.ResponseWriter, r *Request) *Ctx {
 	ctx.Writer = NewResponseWriter(w)
 	ctx.Request = r
 
-	// Use headers directly without copying for zero-allocation
+	// Use headers from the response writer
 	if w != nil && w.Header() != nil {
-		ctx.Request.Header = Header(w.Header())
+		ctx.Request.Header = NewHeaderFromMap(w.Header())
 	}
 
 	return ctx
@@ -209,8 +209,10 @@ func ReleaseContext(ctx *Ctx) {
 	ctx.statusCode = StatusOK
 	ctx.err = nil
 
-	for k := range ctx.Request.Header {
-		delete(ctx.Request.Header, k)
+	if ctx.Request != nil && ctx.Request.Header != nil {
+		for k := range *ctx.Request.Header {
+			delete(*ctx.Request.Header, k)
+		}
 	}
 
 	ctx.body = ctx.body[:0]
@@ -242,7 +244,7 @@ func (c *Ctx) StatusCode() int {
 //
 // Returns:
 //   - The Header object containing all response headers
-func (c *Ctx) Header() Header {
+func (c *Ctx) Header() *Header {
 	return c.Request.Header
 }
 

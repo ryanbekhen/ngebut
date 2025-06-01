@@ -10,7 +10,7 @@ type ResponseWriter interface {
 	// Header returns the header map that will be sent by WriteHeader.
 	// The Header map also is the mechanism with which
 	// Handlers can set HTTP trailers.
-	Header() Header
+	Header() *Header
 
 	// Write writes the data to the connection as part of an HTTP reply.
 	Write([]byte) (int, error)
@@ -78,9 +78,11 @@ func ReleaseResponseWriter(w ResponseWriter) {
 }
 
 // Header returns the header map that will be sent by WriteHeader
-func (a *httpResponseWriterAdapter) Header() Header {
-	// Cast our headerAdapter to Header type without allocation
-	return Header(a.header)
+func (a *httpResponseWriterAdapter) Header() *Header {
+	// Cast the headerAdapter to Header and return a pointer to it
+	// This ensures that changes to the returned header affect the original header
+	h := Header(a.header)
+	return &h
 }
 
 // Write writes the data to the connection as part of an HTTP reply

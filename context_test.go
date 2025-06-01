@@ -655,7 +655,7 @@ func TestGetContextReleaseContext(t *testing.T) {
 	// Check that the context was reset
 	assert.Equal(t, StatusOK, ctx2.statusCode, "ctx2.statusCode should be StatusOK")
 	assert.Nil(t, ctx2.err, "ctx2.err should be nil")
-	assert.Equal(t, 0, len(ctx2.Request.Header), "ctx2.header should be empty")
+	assert.Equal(t, 0, len(*ctx2.Request.Header), "ctx2.header should be empty")
 	assert.Empty(t, ctx2.body, "ctx2.body should be empty")
 	assert.Empty(t, ctx2.middlewareStack, "ctx2.middlewareStack should be empty")
 	assert.Equal(t, -1, ctx2.middlewareIndex, "ctx2.middlewareIndex should be -1")

@@ -31,7 +31,7 @@ type Request struct {
 	Proto string
 
 	// Header contains the request header fields.
-	Header Header
+	Header *Header
 
 	// Body is the request's body.
 	Body []byte
@@ -58,7 +58,7 @@ type Request struct {
 func NewRequest(r *http.Request) *Request {
 	if r == nil {
 		return &Request{
-			Header: make(Header),
+			Header: NewHeader(),
 			ctx:    context.Background(),
 		}
 	}
@@ -88,13 +88,12 @@ func NewRequest(r *http.Request) *Request {
 		requestBodyBufferPool.Put(buf)
 	}
 
-	// Convert http.Header to our Header type without allocation
-	// by casting the map directly
+	// Convert http.Header to our Header type using the constructor
 	return &Request{
 		Method:        r.Method,
 		URL:           r.URL,
 		Proto:         r.Proto,
-		Header:        Header(r.Header),
+		Header:        NewHeaderFromMap(r.Header),
 		Body:          body,
 		ContentLength: r.ContentLength,
 		Host:          r.Host,

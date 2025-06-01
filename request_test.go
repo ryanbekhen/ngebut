@@ -88,7 +88,7 @@ func TestRequestWithContext(t *testing.T) {
 			Host:   "example.com",
 			Path:   "/path",
 		},
-		Header: make(Header),
+		Header: NewHeader(),
 		Body:   []byte("test body"),
 		ctx:    context.Background(),
 	}
@@ -117,7 +117,7 @@ func TestRequestWithContext(t *testing.T) {
 func TestRequestUserAgent(t *testing.T) {
 	// Test with no User-Agent header
 	req := &Request{
-		Header: make(Header),
+		Header: NewHeader(),
 	}
 	assert.Equal(t, "", req.UserAgent(), "req.UserAgent() should return empty string when no User-Agent header")
 
@@ -136,7 +136,7 @@ func TestRequestSetContext(t *testing.T) {
 			Host:   "example.com",
 			Path:   "/path",
 		},
-		Header: make(Header),
+		Header: NewHeader(),
 		Body:   []byte("test body"),
 		ctx:    context.Background(),
 	}

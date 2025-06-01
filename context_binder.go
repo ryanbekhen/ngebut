@@ -106,7 +106,7 @@ func (c *Ctx) BindForm(obj interface{}) error {
 		}
 
 		// Copy headers to ensure Content-Type with boundary is preserved
-		for k, v := range c.Request.Header {
+		for k, v := range *c.Request.Header {
 			httpReq.Header[k] = v
 		}
 

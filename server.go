@@ -129,8 +129,10 @@ func releaseRequest(r *Request) {
 	r.Proto = ""
 
 	// Clear the header map
-	for k := range r.Header {
-		delete(r.Header, k)
+	if r.Header != nil {
+		for k := range *r.Header {
+			delete(*r.Header, k)
+		}
 	}
 
 	// Clear the body
@@ -321,19 +323,19 @@ func (d *dummyResponseWriter) Flush() {
 // headerPool is a pool of Header objects for reuse
 var headerPool = sync.Pool{
 	New: func() interface{} {
-		return make(Header)
+		return NewHeader()
 	},
 }
 
 // getHeader gets a Header from the pool
-func getHeader() Header {
-	return headerPool.Get().(Header)
+func getHeader() *Header {
+	return headerPool.Get().(*Header)
 }
 
 // releaseHeader returns a Header to the pool
-func releaseHeader(h Header) {
-	for k := range h {
-		delete(h, k)
+func releaseHeader(h *Header) {
+	for k := range *h {
+		delete(*h, k)
 	}
 	headerPool.Put(h)
 }
@@ -404,9 +406,11 @@ func processRequest(hs *httpServer, hc *httpparser.Codec, req *Request, c gnet.C
 	}
 
 	// Then copy headers from context (overriding any with same name)
-	for k, values := range ctx.Request.Header {
-		if len(values) > 0 {
-			parserHeaders[k] = values
+	if ctx.Request.Header != nil {
+		for k, values := range *ctx.Request.Header {
+			if len(values) > 0 {
+				parserHeaders[k] = values
+			}
 		}
 	}
 
