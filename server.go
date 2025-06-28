@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/ryanbekhen/ngebut/internal/httpparser"
-	"github.com/ryanbekhen/ngebut/log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ryanbekhen/ngebut/internal/httpparser"
+	"github.com/ryanbekhen/ngebut/log"
 
 	"github.com/evanphx/wildcat"
 	"github.com/panjf2000/gnet/v2"
@@ -510,6 +511,11 @@ func (s *Server) TRACE(pattern string, handlers ...Handler) *Router {
 // PATCH registers a new route with the PATCH method.
 func (s *Server) PATCH(pattern string, handlers ...Handler) *Router {
 	return s.router.PATCH(pattern, handlers...)
+}
+
+// STATIC registers a new route with the GET method.
+func (s *Server) STATIC(prefix, root string, config ...Static) *Router {
+	return s.router.STATIC(prefix, root, config...)
 }
 
 // Use adds middleware to the router.

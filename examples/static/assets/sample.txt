@@ -1,0 +1,13 @@
+This is a sample text file for testing static file serving in ngebut.
+
+Features demonstrated in this example:
+- Static file serving from directories
+- Directory browsing
+- MIME type detection
+- Custom headers
+- Download mode
+- Byte range requests
+- Conditional serving
+
+ngebut - Fast HTTP framework for Go
+https://github.com/ryanbekhen/ngebut
