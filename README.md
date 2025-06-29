@@ -12,11 +12,13 @@
   Built on top of <a href="https://github.com/panjf2000/gnet">gnet</a>, a high-performance non-blocking networking library for Go.
 </p>
 
-> ⚠️ **Maintenance Notice**: Ngebut is currently under active development and maintenance. Some APIs may change before the first stable release.
+> ⚠️ **Maintenance Notice**: Ngebut is currently under active development and maintenance. Some APIs may change before
+> the first stable release.
 
 ## 📚 Documentation
 
-For more detailed documentation, please visit the [Go Package Documentation](https://pkg.go.dev/github.com/ryanbekhen/ngebut).
+For more detailed documentation, please visit
+the [Go Package Documentation](https://pkg.go.dev/github.com/ryanbekhen/ngebut).
 
 ## 🏗️ Architecture
 
@@ -31,16 +33,18 @@ graph TD
     G --> H[Client]
 
     subgraph "Ngebut Framework"
-    B[Ngebut Server<br>gnet-based]
-    C
-    D
-    E
-    F
-    G
+        B[Ngebut Server<br>gnet-based]
+        C
+        D
+        E
+        F
+        G
     end
 ```
 
-> 💡 **Inspiration**: Ngebut is inspired by [GoFiber](https://github.com/gofiber/fiber) and [Hertz Framework](https://github.com/cloudwego/hertz), aiming to provide a similar developer experience while leveraging gnet for networking.
+> 💡 **Inspiration**: Ngebut is inspired by [GoFiber](https://github.com/gofiber/fiber)
+> and [Hertz Framework](https://github.com/cloudwego/hertz), aiming to provide a similar developer experience while
+> leveraging gnet for networking.
 
 ## ⚡️ Quick Start
 
@@ -82,34 +86,12 @@ func main() {
 
 ## 📖 Documentation
 
-For detailed documentation on server configuration, routing, middleware, and all other features, please refer to the [Go Package Documentation](https://pkg.go.dev/github.com/ryanbekhen/ngebut).
+For detailed documentation on server configuration, routing, middleware, and all other features, please refer to
+the [Go Package Documentation](https://pkg.go.dev/github.com/ryanbekhen/ngebut).
 
-## 📊 Benchmark Comparison
+## 📊 Benchmarks
 
-Benchmark tests were conducted using [wrk](https://github.com/wg/wrk) with 4 threads for 10 seconds.
-
-🌟 **Benchmark Environment** 🌟
-- Device: MacBook Air M3
-- Processor: Apple M3
-- RAM: 16.00 GB
-- Disk: 460Gi
-- Operating System: darwin 15.5
-
-### Text Endpoint (1000 connections)
-| Framework | Requests/sec | Latency (avg) |
-|-----------|--------------|---------------|
-| Fiber     | 226,793.75   | 2.62ms        |
-| Ngebut    | 130,606.36   | 7.06ms        |
-| Net/HTTP  | 119,001.03   | 7.99ms        |
-
-### JSON Endpoint (1000 connections)
-| Framework | Requests/sec | Latency (avg) |
-|-----------|--------------|---------------|
-| Fiber     | 154,318.28   | 8.89ms        |
-| Ngebut    | 120,485.89   | 6.35ms        |
-| Net/HTTP  | 111,881.75   | 10.34ms       |
-
-*Note: Benchmark results may vary based on hardware and environment. Ngebut is still under active development and performance optimizations are ongoing.*
+For detailed benchmark information, please refer to the [Benchmark Documentation](BENCHMARK.md).
 
 ## 🤝 Contributing
 
