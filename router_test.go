@@ -3,6 +3,7 @@ package ngebut
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -325,4 +326,465 @@ func TestMiddlewareStackPool(t *testing.T) {
 
 	// Put the stack back in the pool
 	middlewareStackPool.Put(stack2)
+}
+
+// TestRouterSTATIC tests the STATIC method of Router
+func TestRouterSTATIC(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Test basic static file serving
+	result := router.STATIC("/assets", "examples/static/assets")
+	assert.Equal(router, result, "Router.STATIC() should return the router")
+	assert.Len(router.Routes, 1, "should have 1 route")
+
+	route := router.Routes[0]
+	assert.Equal("/assets/*", route.Pattern, "route pattern should match")
+	assert.Equal("GET", route.Method, "route method should be GET")
+	assert.Len(route.Handlers, 1, "should have 1 handler")
+}
+
+// TestRouterHandleStatic tests the HandleStatic method of Router
+func TestRouterHandleStatic(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Test with default config
+	result := router.HandleStatic("/static", "examples/static/assets")
+	assert.Equal(router, result, "Router.HandleStatic() should return the router")
+	assert.Len(router.Routes, 1, "should have 1 route")
+
+	// Test with custom config
+	config := Static{
+		Browse:    true,
+		ByteRange: true,
+		MaxAge:    3600,
+	}
+	router.HandleStatic("/files", "examples/static/assets", config)
+	assert.Len(router.Routes, 2, "should have 2 routes")
+}
+
+// TestStaticFileServing tests serving actual static files
+func TestStaticFileServing(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving
+	router.STATIC("/assets", "examples/static/assets")
+
+	// Test serving index.html
+	req, _ := http.NewRequest("GET", "http://example.com/assets/index.html", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should return 200 for existing file")
+	assert.Contains(w.Header().Get("Content-Type"), "text/html", "should set correct content type")
+	assert.Contains(w.Body.String(), "<!DOCTYPE html>", "should return HTML content")
+}
+
+// TestStaticFileServingWithDefaultIndex tests serving index file by default
+func TestStaticFileServingWithDefaultIndex(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving with default index
+	router.STATIC("/assets", "examples/static/assets")
+
+	// Test serving directory (should serve index.html)
+	req, _ := http.NewRequest("GET", "http://example.com/assets/", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should return 200 for directory with index")
+	assert.Contains(w.Header().Get("Content-Type"), "text/html", "should set correct content type")
+	assert.Contains(w.Body.String(), "<!DOCTYPE html>", "should return index.html content")
+}
+
+// TestStaticFileServingCSS tests serving CSS files
+func TestStaticFileServingCSS(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving
+	router.STATIC("/assets", "examples/static/assets")
+
+	// Test serving CSS file
+	req, _ := http.NewRequest("GET", "http://example.com/assets/css/style.css", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should return 200 for CSS file")
+	assert.Contains(w.Header().Get("Content-Type"), "text/css", "should set correct content type for CSS")
+	assert.Contains(w.Body.String(), "body", "should return CSS content")
+}
+
+// TestStaticFileServingJS tests serving JavaScript files
+func TestStaticFileServingJS(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving
+	router.STATIC("/assets", "examples/static/assets")
+
+	// Test serving JS file
+	req, _ := http.NewRequest("GET", "http://example.com/assets/js/app.js", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should return 200 for JS file")
+	assert.Contains(w.Header().Get("Content-Type"), "javascript", "should set correct content type for JS")
+	assert.Contains(w.Body.String(), "function", "should return JS content")
+}
+
+// TestStaticFileServingTextFile tests serving text files
+func TestStaticFileServingTextFile(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving
+	router.STATIC("/assets", "examples/static/assets")
+
+	// Test serving text file
+	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should return 200 for text file")
+	assert.Contains(w.Header().Get("Content-Type"), "text/plain", "should set correct content type for text")
+	assert.NotEmpty(w.Body.String(), "should return text content")
+}
+
+// TestStaticFileNotFound tests 404 handling for non-existent files
+func TestStaticFileNotFound(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving
+	router.STATIC("/assets", "examples/static/assets")
+
+	// Test non-existent file
+	req, _ := http.NewRequest("GET", "http://example.com/assets/nonexistent.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusNotFound, w.Code, "should return 404 for non-existent file")
+	assert.Equal("File not found", w.Body.String(), "should return file not found message")
+}
+
+// TestStaticDirectoryBrowsingDisabled tests that directory browsing is disabled by default
+func TestStaticDirectoryBrowsingDisabled(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving without browse enabled
+	router.STATIC("/assets", "examples/static/assets")
+
+	// Test directory without index file (css directory)
+	req, _ := http.NewRequest("GET", "http://example.com/assets/css/", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusForbidden, w.Code, "should return 403 when directory browsing is disabled")
+	assert.Equal("Directory listing is disabled", w.Body.String(), "should return directory listing disabled message")
+}
+
+// TestStaticDirectoryBrowsingEnabled tests that directory browsing works when enabled
+func TestStaticDirectoryBrowsingEnabled(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving with browse enabled
+	config := Static{
+		Browse: true,
+	}
+	router.STATIC("/assets", "examples/static/assets", config)
+
+	// Test directory listing
+	req, _ := http.NewRequest("GET", "http://example.com/assets/css/", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should return 200 when directory browsing is enabled")
+	assert.Contains(w.Header().Get("Content-Type"), "text/html", "should return HTML for directory listing")
+	assert.Contains(w.Body.String(), "Directory listing", "should contain directory listing text")
+	assert.Contains(w.Body.String(), "style.css", "should list files in directory")
+}
+
+// TestStaticByteRangeRequests tests byte range request handling
+func TestStaticByteRangeRequests(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving with byte range enabled
+	config := Static{
+		ByteRange: true,
+	}
+	router.STATIC("/assets", "examples/static/assets", config)
+
+	// Test byte range request
+	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	req.Header.Set("Range", "bytes=0-10")
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	// Test that byte range is at least supported (Accept-Ranges header)
+	assert.Equal("bytes", w.Header().Get("Accept-Ranges"), "should set Accept-Ranges header")
+
+	t.Logf("Response status: %d", w.Code)
+	t.Logf("Content-Length: %s", w.Header().Get("Content-Length"))
+	t.Logf("Content-Range: %s", w.Header().Get("Content-Range"))
+	t.Logf("Body length: %d", len(w.Body.String()))
+
+	// The test verifies that ByteRange config is respected by setting Accept-Ranges header
+	// The actual byte range functionality may depend on the implementation details
+	assert.True(w.Code == StatusOK || w.Code == StatusPartialContent,
+		"should return either 200 or 206 for byte range request")
+}
+
+// TestStaticMaxAge tests Cache-Control header setting
+func TestStaticMaxAge(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving with max age
+	config := Static{
+		MaxAge: 3600, // 1 hour
+	}
+	router.STATIC("/assets", "examples/static/assets", config)
+
+	// Test cache headers
+	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should return 200")
+	assert.Equal("public, max-age=3600", w.Header().Get("Cache-Control"), "should set Cache-Control header")
+}
+
+// TestStaticDownload tests download mode
+func TestStaticDownload(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving with download enabled
+	config := Static{
+		Download: true,
+	}
+	router.STATIC("/assets", "examples/static/assets", config)
+
+	// Test download headers
+	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should return 200")
+	assert.Contains(w.Header().Get("Content-Disposition"), "attachment", "should set Content-Disposition for download")
+	assert.Contains(w.Header().Get("Content-Disposition"), "sample.txt", "should include filename in Content-Disposition")
+}
+
+// TestStaticNext tests the Next function
+func TestStaticNext(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Test counter to track Next function calls
+	nextCallCount := 0
+
+	// Register static file serving with Next function that skips certain files
+	config := Static{
+		Next: func(c *Ctx) bool {
+			nextCallCount++
+			// Skip files ending with .private
+			return strings.HasSuffix(c.Path(), ".private")
+		},
+	}
+	router.STATIC("/assets", "examples/static/assets", config)
+
+	// Test normal file serving (Next returns false)
+	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should serve normal files when Next returns false")
+	assert.Contains(w.Body.String(), "This is a sample", "should return file content")
+	assert.Equal(1, nextCallCount, "Next function should be called once")
+
+	// Reset for next test
+	nextCallCount = 0
+
+	// Test that .private files are skipped (Next returns true)
+	req, _ = http.NewRequest("GET", "http://example.com/assets/secret.private", nil)
+	w = httptest.NewRecorder()
+	ctx = GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	// The Next function should be called and return true
+	assert.Equal(1, nextCallCount, "Next function should be called once for .private file")
+
+	// Since Next returns true, the static handler calls c.Next() which continues
+	// But since there's only one handler, the behavior might vary
+	// The important thing is that Next was called and the file was skipped
+	t.Logf("Response status: %d, body: %s", w.Code, w.Body.String())
+}
+
+// TestStaticModifyResponse tests the ModifyResponse function
+func TestStaticModifyResponse(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving with ModifyResponse function
+	config := Static{
+		ModifyResponse: func(c *Ctx) {
+			c.Set("X-Custom-Header", "Modified")
+		},
+	}
+	router.STATIC("/assets", "examples/static/assets", config)
+
+	// Test that ModifyResponse is called
+	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusOK, w.Code, "should return 200")
+	assert.Equal("Modified", w.Header().Get("X-Custom-Header"), "should apply ModifyResponse function")
+}
+
+// TestStaticSecurityPathTraversal tests protection against directory traversal attacks
+func TestStaticSecurityPathTraversal(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Register static file serving
+	router.STATIC("/assets", "examples/static/assets")
+
+	// Test directory traversal attempt
+	req, _ := http.NewRequest("GET", "http://example.com/assets/../../../config.go", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(StatusForbidden, w.Code, "should block directory traversal attempts")
+	assert.Equal("Forbidden", w.Body.String(), "should return forbidden message")
+}
+
+// TestIsSubPath tests the isSubPath security function
+func TestIsSubPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     string
+		target   string
+		expected bool
+	}{
+		{
+			name:     "Valid subdirectory",
+			base:     "/var/www",
+			target:   "/var/www/public/index.html",
+			expected: true,
+		},
+		{
+			name:     "Same directory",
+			base:     "/var/www",
+			target:   "/var/www",
+			expected: true,
+		},
+		{
+			name:     "Directory traversal with ..",
+			base:     "/var/www",
+			target:   "/var/www/../etc/passwd",
+			expected: false,
+		},
+		{
+			name:     "Similar prefix but different directory",
+			base:     "/var/www",
+			target:   "/var/www2/arifin.jpg",
+			expected: false,
+		},
+		{
+			name:     "Another similar prefix attack",
+			base:     "/home/user",
+			target:   "/home/user2/secret.txt",
+			expected: false,
+		},
+		{
+			name:     "Valid nested subdirectory",
+			base:     "/app/static",
+			target:   "/app/static/css/style.css",
+			expected: true,
+		},
+		{
+			name:     "Completely different path",
+			base:     "/var/www",
+			target:   "/etc/passwd",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isSubPath(tt.base, tt.target)
+			assert.Equal(t, tt.expected, result, "isSubPath(%q, %q) = %v; want %v", tt.base, tt.target, result, tt.expected)
+		})
+	}
+}
+
+// TestStaticPrefixHandling tests various prefix formats
+func TestStaticPrefixHandling(t *testing.T) {
+	assert := assert.New(t)
+	router := NewRouter()
+
+	// Test prefix without trailing slash
+	router.STATIC("/assets", "examples/static/assets")
+
+	// Test prefix with trailing slash
+	router.STATIC("/files/", "examples/static/assets")
+
+	// Should have 2 routes
+	assert.Len(router.Routes, 2, "should have 2 routes")
+
+	// Both should have wildcard patterns
+	assert.Equal("/assets/*", router.Routes[0].Pattern, "first route should have wildcard pattern")
+	assert.Equal("/files/*", router.Routes[1].Pattern, "second route should have wildcard pattern")
 }

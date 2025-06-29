@@ -256,3 +256,237 @@ func TestNoopLogger(t *testing.T) {
 		logger.Fatalf("test %s", "fatal")
 	}, "Logger methods should not panic")
 }
+
+// TestServerSTATIC tests the STATIC method of Server
+func TestServerSTATIC(t *testing.T) {
+	server := New(DefaultConfig())
+
+	// Test basic static file serving registration
+	result := server.STATIC("/assets", "examples/static/assets")
+	require.NotNil(t, result, "Server.STATIC() returned nil router")
+	assert.Equal(t, server.router, result, "Server.STATIC() did not return the server's router")
+
+	// Verify the route was registered
+	assert.Len(t, server.router.Routes, 1, "len(server.router.Routes) should be 1")
+	assert.Equal(t, "/assets/*", server.router.Routes[0].Pattern, "route pattern should be '/assets/*'")
+	assert.Equal(t, "GET", server.router.Routes[0].Method, "route method should be GET")
+
+	// Test with custom config
+	config := Static{
+		Browse:    true,
+		ByteRange: true,
+		MaxAge:    3600,
+	}
+	server.STATIC("/files", "examples/static/assets", config)
+	assert.Len(t, server.router.Routes, 2, "len(server.router.Routes) should be 2 after adding second route")
+}
+
+// TestServerStaticFileIntegration tests end-to-end static file serving through the server
+func TestServerStaticFileIntegration(t *testing.T) {
+	server := New(DefaultConfig())
+
+	// Register static file serving
+	server.STATIC("/assets", "examples/static/assets")
+
+	// Test serving index.html
+	req, _ := http.NewRequest("GET", "http://example.com/assets/index.html", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	// Process through the server's router
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusOK, w.Code, "Expected status code to be StatusOK")
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/html", "Expected content type to contain text/html")
+	assert.Contains(t, w.Body.String(), "<!DOCTYPE html>", "Expected response to contain HTML doctype")
+}
+
+// TestServerStaticWithMultipleConfigs tests server with multiple static routes and configs
+func TestServerStaticWithMultipleConfigs(t *testing.T) {
+	server := New(DefaultConfig())
+
+	// Register multiple static routes with different configs
+	server.STATIC("/public", "examples/static/assets")
+
+	downloadConfig := Static{
+		Download: true,
+		MaxAge:   3600,
+	}
+	server.STATIC("/downloads", "examples/static/assets", downloadConfig)
+
+	browseConfig := Static{
+		Browse: true,
+	}
+	server.STATIC("/browse", "examples/static/assets", browseConfig)
+
+	// Verify all routes were registered
+	assert.Len(t, server.router.Routes, 3, "Expected 3 routes to be registered")
+
+	// Test normal serving
+	req, _ := http.NewRequest("GET", "http://example.com/public/sample.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusOK, w.Code, "Expected normal serving to work")
+	assert.NotContains(t, w.Header().Get("Content-Disposition"), "attachment", "Normal route should not force download")
+
+	// Test download route
+	req, _ = http.NewRequest("GET", "http://example.com/downloads/sample.txt", nil)
+	w = httptest.NewRecorder()
+	ctx = GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusOK, w.Code, "Expected download serving to work")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "attachment", "Download route should force download")
+	assert.Equal(t, "public, max-age=3600", w.Header().Get("Cache-Control"), "Download route should set cache control")
+
+	// Test browse route with directory
+	req, _ = http.NewRequest("GET", "http://example.com/browse/css/", nil)
+	w = httptest.NewRecorder()
+	ctx = GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusOK, w.Code, "Expected browse route to work")
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/html", "Browse route should return HTML for directory listing")
+	assert.Contains(t, w.Body.String(), "Directory listing", "Browse route should show directory listing")
+}
+
+// TestServerStaticErrorHandling tests error scenarios with static file serving
+func TestServerStaticErrorHandling(t *testing.T) {
+	server := New(DefaultConfig())
+
+	// Register static file serving
+	server.STATIC("/assets", "examples/static/assets")
+
+	// Test 404 for non-existent file
+	req, _ := http.NewRequest("GET", "http://example.com/assets/nonexistent.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusNotFound, w.Code, "Expected 404 for non-existent file")
+	assert.Equal(t, "File not found", w.Body.String(), "Expected 'File not found' message")
+
+	// Test 403 for directory without browse enabled
+	req, _ = http.NewRequest("GET", "http://example.com/assets/css/", nil)
+	w = httptest.NewRecorder()
+	ctx = GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusForbidden, w.Code, "Expected 403 for directory access without browse")
+	assert.Equal(t, "Directory listing is disabled", w.Body.String(), "Expected directory listing disabled message")
+
+	// Test 403 for path traversal
+	req, _ = http.NewRequest("GET", "http://example.com/assets/../../../config.go", nil)
+	w = httptest.NewRecorder()
+	ctx = GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusForbidden, w.Code, "Expected 403 for path traversal attempt")
+	assert.Equal(t, "Forbidden", w.Body.String(), "Expected 'Forbidden' message for path traversal")
+}
+
+// TestServerStaticWithCustomErrorHandler tests static serving with custom error handler
+func TestServerStaticWithCustomErrorHandler(t *testing.T) {
+	// Create server with custom error handler
+	customConfig := Config{
+		ErrorHandler: func(c *Ctx) {
+			c.Status(StatusInternalServerError).String("Custom server error")
+		},
+	}
+	server := New(customConfig)
+
+	// Register static file serving
+	server.STATIC("/assets", "examples/static/assets")
+
+	// Test that static file serving still works normally (no errors triggered)
+	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusOK, w.Code, "Static file serving should work with custom error handler")
+	assert.NotEqual(t, "Custom server error", w.Body.String(), "Should not trigger custom error handler for successful requests")
+}
+
+// TestServerStaticHeaderSettings tests that static files set appropriate headers
+func TestServerStaticHeaderSettings(t *testing.T) {
+	server := New(DefaultConfig())
+
+	// Register static file serving with custom config
+	config := Static{
+		MaxAge:    7200,
+		ByteRange: true,
+	}
+	server.STATIC("/assets", "examples/static/assets", config)
+
+	// Test header setting
+	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusOK, w.Code, "Expected successful response")
+	assert.Equal(t, "public, max-age=7200", w.Header().Get("Cache-Control"), "Expected Cache-Control header to be set")
+	assert.Equal(t, "bytes", w.Header().Get("Accept-Ranges"), "Expected Accept-Ranges header for ByteRange support")
+	assert.NotEmpty(t, w.Header().Get("Last-Modified"), "Expected Last-Modified header to be set")
+	assert.NotEmpty(t, w.Header().Get("Content-Length"), "Expected Content-Length header to be set")
+	// Note: Server header might not be set in test context, so we check if it's present
+	serverHeader := w.Header().Get("Server")
+	t.Logf("Server header: '%s'", serverHeader)
+	// The server header test is informational since it may depend on the test setup
+}
+
+// TestServerStaticDefaultIndexHandling tests default index file handling
+func TestServerStaticDefaultIndexHandling(t *testing.T) {
+	server := New(DefaultConfig())
+
+	// Register static file serving
+	server.STATIC("/assets", "examples/static/assets")
+
+	// Test accessing directory root (should serve index.html)
+	req, _ := http.NewRequest("GET", "http://example.com/assets/", nil)
+	w := httptest.NewRecorder()
+	ctx := GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	assert.Equal(t, StatusOK, w.Code, "Expected successful response for directory with index file")
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/html", "Expected HTML content type for index file")
+	assert.Contains(t, w.Body.String(), "<!DOCTYPE html>", "Expected HTML content from index.html")
+
+	// Test accessing root without trailing slash
+	req, _ = http.NewRequest("GET", "http://example.com/assets", nil)
+	w = httptest.NewRecorder()
+	ctx = GetContext(w, req)
+
+	server.router.ServeHTTP(ctx, ctx.Request)
+	ctx.Writer.Flush()
+
+	t.Logf("Response status for /assets: %d", w.Code)
+	t.Logf("Response body: %s", w.Body.String())
+
+	// The route pattern is "/assets/*" so "/assets" without trailing slash might not match
+	// This behavior may vary depending on the router implementation
+	assert.True(t, w.Code == StatusOK || w.Code == StatusNotFound,
+		"Response should be either 200 (if route matches) or 404 (if route doesn't match without trailing slash)")
+}

@@ -2,7 +2,13 @@ package ngebut
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"mime"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -84,10 +90,10 @@ func (r *Router) Use(middleware ...interface{}) {
 
 // Handle registers a new route with the given pattern and method.
 func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
-	// Convert URL parameters like :id to regex patterns
+	// Convert URL parameters like :id and wildcards * to regex patterns
 	var regexPattern string
 
-	if strings.Contains(pattern, ":") {
+	if strings.Contains(pattern, ":") || strings.Contains(pattern, "*") {
 		// Get a string builder from the pool
 		sb := stringBuilderPool.Get().(*strings.Builder)
 		sb.Reset()
@@ -121,16 +127,22 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 				sb.WriteString("/")
 			}
 			if len(segment) > 0 && segment[0] == ':' {
+				// Parameter segment like :id
 				sb.WriteString("([^/]+)")
+			} else if segment == "*" {
+				// Wildcard segment - matches everything including slashes
+				sb.WriteString("(.*)")
 			} else {
-				sb.WriteString(segment)
+				// Regular segment - escape special regex characters
+				escaped := regexp.QuoteMeta(segment)
+				sb.WriteString(escaped)
 			}
 		}
 		sb.WriteString("$")
 		regexPattern = sb.String()
 	} else {
-		// Simple case, just add ^ and $
-		regexPattern = "^" + pattern + "$"
+		// Simple case, just add ^ and $ and escape special regex characters
+		regexPattern = "^" + regexp.QuoteMeta(pattern) + "$"
 	}
 
 	regex := regexp.MustCompile(regexPattern)
@@ -153,6 +165,397 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 	}
 
 	return r
+}
+
+// HandleStatic registers a new route for serving static files.
+func (r *Router) HandleStatic(prefix, root string, config ...Static) *Router {
+	// Use default config if none provided
+	cfg := DefaultStaticConfig
+	if len(config) > 0 {
+		cfg = config[0]
+	}
+
+	// Clean up the prefix to ensure it ends with /*
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	pattern := prefix + "*"
+
+	// Create the static file handler
+	handler := createStaticHandler(prefix, root, cfg)
+
+	// Register the route
+	return r.Handle(pattern, MethodGet, handler)
+}
+
+// createStaticHandler creates a handler function for serving static files
+func createStaticHandler(prefix, root string, config Static) Handler {
+	// Ensure root path is absolute and clean
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		absRoot = root
+	}
+
+	return func(c *Ctx) {
+		// Skip if Next function returns true
+		if config.Next != nil && config.Next(c) {
+			c.Next()
+			return
+		}
+
+		// Get the file path from the URL
+		filePath := strings.TrimPrefix(c.Path(), strings.TrimSuffix(prefix, "/"))
+
+		// Remove leading slash if present
+		filePath = strings.TrimPrefix(filePath, "/")
+
+		if filePath == "" {
+			filePath = config.Index
+		}
+
+		// Clean the file path and join with root
+		filePath = filepath.Clean(filePath)
+		fullPath := filepath.Join(absRoot, filePath)
+
+		// Get file info first to check if file exists
+		fileInfo, err := os.Stat(fullPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				c.Status(StatusNotFound)
+				c.String("File not found")
+				return
+			}
+			c.Status(StatusInternalServerError)
+			c.String("Internal Server Error")
+			return
+		}
+
+		// Security check: ensure the file path is within the root directory
+		// Only perform symlink resolution if the file exists
+		resolvedFullPath, err := filepath.EvalSymlinks(fullPath)
+		if err != nil || !isSubPath(absRoot, resolvedFullPath) {
+			c.Status(StatusForbidden)
+			c.String("Forbidden")
+			return
+		}
+
+		// Handle directory requests
+		if fileInfo.IsDir() {
+			// Try to serve index file only if Index is specified
+			if config.Index != "" {
+				indexPath := filepath.Join(fullPath, config.Index)
+				if indexInfo, err := os.Stat(indexPath); err == nil && !indexInfo.IsDir() {
+					fullPath = indexPath
+					fileInfo = indexInfo
+				} else if config.Browse {
+					// Serve directory listing
+					serveDirectoryListing(c, fullPath, filePath, config)
+					return
+				} else {
+					c.Status(StatusForbidden)
+					c.String("Directory listing is disabled")
+					return
+				}
+			} else if config.Browse {
+				// No index file specified, serve directory listing
+				serveDirectoryListing(c, fullPath, filePath, config)
+				return
+			} else {
+				c.Status(StatusForbidden)
+				c.String("Directory listing is disabled")
+				return
+			}
+		}
+
+		// Handle byte range requests
+		if config.ByteRange && c.Get("Range") != "" {
+			serveFileWithRange(c, fullPath, fileInfo, config)
+			return
+		}
+
+		// Serve the file
+		serveFile(c, fullPath, fileInfo, config)
+	}
+}
+
+// serveFile serves a single file
+func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
+	// Open and read the file
+	file, err := os.Open(filePath)
+	if err != nil {
+		c.Status(StatusInternalServerError)
+		c.String("Error opening file")
+		return
+	}
+	defer file.Close()
+
+	// Set headers
+	setFileHeaders(c, filePath, fileInfo, config)
+
+	// Call ModifyResponse if provided
+	if config.ModifyResponse != nil {
+		config.ModifyResponse(c)
+	}
+
+	// Determine content type
+	contentType := mime.TypeByExtension(filepath.Ext(filePath))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Set content type header
+	c.Set("Content-Type", contentType)
+
+	// Stream the file directly to reduce memory usage and GC pressure
+	_, err = io.Copy(c.Writer, file)
+	if err != nil {
+		logger.Error().Err(err).Msg("Error serving file")
+	}
+}
+
+// serveFileWithRange serves a file with HTTP range support
+func serveFileWithRange(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
+	rangeHeader := c.Get("Range")
+	if !strings.HasPrefix(rangeHeader, "bytes=") {
+		// Invalid range header, serve the whole file
+		serveFile(c, filePath, fileInfo, config)
+		return
+	}
+
+	fileSize := fileInfo.Size()
+	ranges := parseRangeHeader(rangeHeader[6:], fileSize) // Remove "bytes=" prefix
+
+	if len(ranges) == 0 {
+		// Invalid range, return 416 Range Not Satisfiable
+		c.Status(StatusRequestedRangeNotSatisfiable)
+		c.Set("Content-Range", fmt.Sprintf("bytes */%d", fileSize))
+		return
+	}
+
+	// For simplicity, only handle single range requests
+	if len(ranges) > 1 {
+		serveFile(c, filePath, fileInfo, config)
+		return
+	}
+
+	r := ranges[0]
+
+	// Open and seek to the range start
+	file, err := os.Open(filePath)
+	if err != nil {
+		c.Status(StatusInternalServerError)
+		c.String("Error opening file")
+		return
+	}
+	defer file.Close()
+
+	_, err = file.Seek(r.start, 0)
+	if err != nil {
+		c.Status(StatusInternalServerError)
+		c.String("Error seeking file")
+		return
+	}
+
+	// Read the range content
+	rangeLength := r.end - r.start + 1
+	content := make([]byte, rangeLength)
+	_, err = io.ReadFull(file, content)
+	if err != nil {
+		c.Status(StatusInternalServerError)
+		c.String("Error reading file range")
+		return
+	}
+
+	// Set range headers
+	c.Status(StatusPartialContent)
+	c.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", r.start, r.end, fileSize))
+	c.Set("Accept-Ranges", "bytes")
+	c.Set("Content-Length", strconv.FormatInt(rangeLength, 10))
+
+	// Set other headers
+	setFileHeaders(c, filePath, fileInfo, config)
+
+	// Call ModifyResponse if provided
+	if config.ModifyResponse != nil {
+		config.ModifyResponse(c)
+	}
+
+	// Determine content type
+	contentType := mime.TypeByExtension(filepath.Ext(filePath))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Send the range content
+	c.Data(contentType, content)
+}
+
+// serveDirectoryListing serves a directory listing
+func serveDirectoryListing(c *Ctx, dirPath, urlPath string, config Static) {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		c.Status(StatusInternalServerError)
+		c.String("Error reading directory")
+		return
+	}
+
+	// Build HTML directory listing
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+	<title>Directory listing for %s</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 20px; }
+		table { border-collapse: collapse; width: 100%%; }
+		th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+		th { background-color: #f2f2f2; }
+		a { text-decoration: none; color: #0066cc; }
+		a:hover { text-decoration: underline; }
+	</style>
+</head>
+<body>
+	<h1>Directory listing for %s</h1>
+	<table>
+		<tr><th>Name</th><th>Size</th><th>Modified</th></tr>`, urlPath, urlPath)
+
+	// Add parent directory link if not at root
+	if urlPath != "/" {
+		html += `<tr><td><a href="../">../</a></td><td>-</td><td>-</td></tr>`
+	}
+
+	// Add entries
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		name := entry.Name()
+		if entry.IsDir() {
+			name += "/"
+		}
+
+		size := "-"
+		if !entry.IsDir() {
+			size = formatFileSize(info.Size())
+		}
+
+		modTime := info.ModTime().Format("2006-01-02 15:04:05")
+		html += fmt.Sprintf(`<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td></tr>`,
+			name, name, size, modTime)
+	}
+
+	html += `</table></body></html>`
+
+	c.HTML(html)
+}
+
+// setFileHeaders sets common headers for file responses
+func setFileHeaders(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
+	// Set Last-Modified header
+	c.Set("Last-Modified", fileInfo.ModTime().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"))
+
+	// Set Cache-Control header
+	if config.MaxAge > 0 {
+		c.Set("Cache-Control", fmt.Sprintf("public, max-age=%d", config.MaxAge))
+	}
+
+	// Set Content-Length header
+	c.Set("Content-Length", strconv.FormatInt(fileInfo.Size(), 10))
+
+	// Set Content-Disposition for downloads
+	if config.Download {
+		filename := filepath.Base(filePath)
+		c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	}
+
+	// Set Accept-Ranges header if byte range is supported
+	if config.ByteRange {
+		c.Set("Accept-Ranges", "bytes")
+	}
+}
+
+// httpRange represents a byte range request
+type httpRange struct {
+	start, end int64
+}
+
+// parseRangeHeader parses the Range header value
+func parseRangeHeader(rangeSpec string, fileSize int64) []httpRange {
+	var ranges []httpRange
+
+	// Split multiple ranges by comma
+	parts := strings.Split(rangeSpec, ",")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+
+		if strings.Contains(part, "-") {
+			rangeParts := strings.SplitN(part, "-", 2)
+
+			var start, end int64
+			var err error
+
+			if rangeParts[0] == "" {
+				// Suffix-byte-range-spec (e.g., "-500")
+				if rangeParts[1] == "" {
+					continue // Invalid range
+				}
+				suffixLength, err := strconv.ParseInt(rangeParts[1], 10, 64)
+				if err != nil || suffixLength >= fileSize {
+					continue
+				}
+				start = fileSize - suffixLength
+				end = fileSize - 1
+			} else if rangeParts[1] == "" {
+				// Range from start to end (e.g., "500-")
+				start, err = strconv.ParseInt(rangeParts[0], 10, 64)
+				if err != nil || start >= fileSize {
+					continue
+				}
+				end = fileSize - 1
+			} else {
+				// Full range (e.g., "0-499")
+				start, err = strconv.ParseInt(rangeParts[0], 10, 64)
+				if err != nil {
+					continue
+				}
+				end, err = strconv.ParseInt(rangeParts[1], 10, 64)
+				if err != nil || start > end || start >= fileSize {
+					continue
+				}
+				if end >= fileSize {
+					end = fileSize - 1
+				}
+			}
+
+			ranges = append(ranges, httpRange{start: start, end: end})
+		}
+	}
+
+	return ranges
+}
+
+// formatFileSize formats file size in human-readable format
+func formatFileSize(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
+	}
+	div, exp := int64(unit), 0
+	for n := size / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGTPE"[exp])
+}
+
+// isSubPath checks if target is a subdirectory of base
+// This is more secure than using strings.HasPrefix as it prevents
+// directory traversal attacks where directory names share prefixes
+func isSubPath(base, target string) bool {
+	rel, err := filepath.Rel(base, target)
+	return err == nil && !strings.HasPrefix(rel, "..")
 }
 
 // GET registers a new route with the GET method.
@@ -198,6 +601,11 @@ func (r *Router) TRACE(pattern string, handlers ...Handler) *Router {
 // PATCH registers a new route with the PATCH method.
 func (r *Router) PATCH(pattern string, handlers ...Handler) *Router {
 	return r.Handle(pattern, MethodPatch, handlers...)
+}
+
+// STATIC registers a new route with the GET method.
+func (r *Router) STATIC(prefix, root string, config ...Static) *Router {
+	return r.HandleStatic(prefix, root, config...)
 }
 
 // paramContextPool is a pool for request contexts with parameters
