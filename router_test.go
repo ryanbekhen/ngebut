@@ -710,6 +710,66 @@ func TestStaticSecurityPathTraversal(t *testing.T) {
 	assert.Equal("Forbidden", w.Body.String(), "should return forbidden message")
 }
 
+// TestIsSubPath tests the isSubPath security function
+func TestIsSubPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     string
+		target   string
+		expected bool
+	}{
+		{
+			name:     "Valid subdirectory",
+			base:     "/var/www",
+			target:   "/var/www/public/index.html",
+			expected: true,
+		},
+		{
+			name:     "Same directory",
+			base:     "/var/www",
+			target:   "/var/www",
+			expected: true,
+		},
+		{
+			name:     "Directory traversal with ..",
+			base:     "/var/www",
+			target:   "/var/www/../etc/passwd",
+			expected: false,
+		},
+		{
+			name:     "Similar prefix but different directory",
+			base:     "/var/www",
+			target:   "/var/www2/arifin.jpg",
+			expected: false,
+		},
+		{
+			name:     "Another similar prefix attack",
+			base:     "/home/user",
+			target:   "/home/user2/secret.txt",
+			expected: false,
+		},
+		{
+			name:     "Valid nested subdirectory",
+			base:     "/app/static",
+			target:   "/app/static/css/style.css",
+			expected: true,
+		},
+		{
+			name:     "Completely different path",
+			base:     "/var/www",
+			target:   "/etc/passwd",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isSubPath(tt.base, tt.target)
+			assert.Equal(t, tt.expected, result, "isSubPath(%q, %q) = %v; want %v", tt.base, tt.target, result, tt.expected)
+		})
+	}
+}
+
 // TestStaticPrefixHandling tests various prefix formats
 func TestStaticPrefixHandling(t *testing.T) {
 	assert := assert.New(t)

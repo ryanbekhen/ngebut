@@ -233,7 +233,7 @@ func createStaticHandler(prefix, root string, config Static) Handler {
 		// Security check: ensure the file path is within the root directory
 		// Only perform symlink resolution if the file exists
 		resolvedFullPath, err := filepath.EvalSymlinks(fullPath)
-		if err != nil || !strings.HasPrefix(resolvedFullPath, absRoot) {
+		if err != nil || !isSubPath(absRoot, resolvedFullPath) {
 			c.Status(StatusForbidden)
 			c.String("Forbidden")
 			return
@@ -548,6 +548,14 @@ func formatFileSize(size int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGTPE"[exp])
+}
+
+// isSubPath checks if target is a subdirectory of base
+// This is more secure than using strings.HasPrefix as it prevents
+// directory traversal attacks where directory names share prefixes
+func isSubPath(base, target string) bool {
+	rel, err := filepath.Rel(base, target)
+	return err == nil && !strings.HasPrefix(rel, "..")
 }
 
 // GET registers a new route with the GET method.
