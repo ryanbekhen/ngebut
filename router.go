@@ -287,14 +287,6 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 	}
 	defer file.Close()
 
-	// Read file content
-	content, err := io.ReadAll(file)
-	if err != nil {
-		c.Status(StatusInternalServerError)
-		c.String("Error reading file")
-		return
-	}
-
 	// Set headers
 	setFileHeaders(c, filePath, fileInfo, config)
 
@@ -309,8 +301,14 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 		contentType = "application/octet-stream"
 	}
 
-	// Send the file
-	c.Data(contentType, content)
+	// Set content type header
+	c.Set("Content-Type", contentType)
+
+	// Stream the file directly to reduce memory usage and GC pressure
+	_, err = io.Copy(c.Writer, file)
+	if err != nil {
+		logger.Error().Err(err).Msg("Error serving file")
+	}
 }
 
 // serveFileWithRange serves a file with HTTP range support
