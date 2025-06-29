@@ -7,7 +7,7 @@ toolchain go1.24.3
 require (
 	github.com/evanphx/wildcat v0.0.0-20141114174135-e7012f664567
 	github.com/goccy/go-json v0.10.5
-	github.com/panjf2000/gnet/v2 v2.8.0
+	github.com/panjf2000/gnet/v2 v2.9.1
 	github.com/stretchr/testify v1.10.0
 )
 
