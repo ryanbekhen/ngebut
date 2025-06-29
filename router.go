@@ -217,14 +217,7 @@ func createStaticHandler(prefix, root string, config Static) Handler {
 		filePath = filepath.Clean(filePath)
 		fullPath := filepath.Join(absRoot, filePath)
 
-		// Security check: ensure the file path is within the root directory
-		if !strings.HasPrefix(fullPath, absRoot) {
-			c.Status(StatusForbidden)
-			c.String("Forbidden")
-			return
-		}
-
-		// Get file info
+		// Get file info first to check if file exists
 		fileInfo, err := os.Stat(fullPath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -234,6 +227,15 @@ func createStaticHandler(prefix, root string, config Static) Handler {
 			}
 			c.Status(StatusInternalServerError)
 			c.String("Internal Server Error")
+			return
+		}
+
+		// Security check: ensure the file path is within the root directory
+		// Only perform symlink resolution if the file exists
+		resolvedFullPath, err := filepath.EvalSymlinks(fullPath)
+		if err != nil || !strings.HasPrefix(resolvedFullPath, absRoot) {
+			c.Status(StatusForbidden)
+			c.String("Forbidden")
 			return
 		}
 
