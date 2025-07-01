@@ -93,6 +93,8 @@ the [Go Package Documentation](https://pkg.go.dev/github.com/ryanbekhen/ngebut).
 
 For detailed benchmark information, please refer to the [Benchmark Documentation](BENCHMARK.md).
 
+For comparative benchmarks against other frameworks like Fiber and standard net/http, check out the [benchmarks](./benchmarks) directory.
+
 ## 🤝 Contributing
 
 Contributions are very welcome! Please submit a Pull Request.
