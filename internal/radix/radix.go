@@ -1,7 +1,7 @@
 package radix
 
 import (
-	"github.c
+	"github.com/ryanbekhen/ngebut/internal/unsafe"
 	"strings"
 	"sync"
 )
