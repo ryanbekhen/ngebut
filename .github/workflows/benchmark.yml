@@ -91,7 +91,6 @@ jobs:
             "os"
             "regexp"
             "strconv"
-            "strings"
         )
 
         // main function compares benchmark results from the base branch and PR
