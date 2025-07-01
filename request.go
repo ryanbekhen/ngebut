@@ -3,7 +3,6 @@ package ngebut
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/url"
 	"sync"
@@ -15,7 +14,7 @@ import (
 // returned to the pool for future use.
 var requestBodyBufferPool = sync.Pool{
 	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 4096)) // 4KB initial capacity
+		return bytes.NewBuffer(make([]byte, 0, 8192)) // 8KB initial capacity to reduce reallocations
 	},
 }
 
@@ -55,52 +54,10 @@ type Request struct {
 }
 
 // NewRequest creates a new Request from an http.Request.
+// It uses the requestPool to reuse Request objects when possible.
 func NewRequest(r *http.Request) *Request {
-	if r == nil {
-		return &Request{
-			Header: NewHeader(),
-			ctx:    context.Background(),
-		}
-	}
-
-	// Read the request body if it exists
-	var body []byte
-	if r.Body != nil {
-		// Get a buffer from the pool
-		buf := requestBodyBufferPool.Get().(*bytes.Buffer)
-		buf.Reset()
-
-		// Read the body into the buffer
-		_, err := io.Copy(buf, r.Body)
-		if err == nil {
-			// Close the original body
-			_ = r.Body.Close()
-
-			// Get the bytes from the buffer
-			body = buf.Bytes()
-
-			// Create a new ReadCloser so the body can be read again if needed
-			// Use the same buffer to avoid allocation
-			r.Body = io.NopCloser(bytes.NewReader(body))
-		}
-
-		// Return the buffer to the pool
-		requestBodyBufferPool.Put(buf)
-	}
-
-	// Convert http.Header to our Header type using the constructor
-	return &Request{
-		Method:        r.Method,
-		URL:           r.URL,
-		Proto:         r.Proto,
-		Header:        NewHeaderFromMap(r.Header),
-		Body:          body,
-		ContentLength: r.ContentLength,
-		Host:          r.Host,
-		RemoteAddr:    r.RemoteAddr,
-		RequestURI:    r.RequestURI,
-		ctx:           r.Context(),
-	}
+	// Use getRequest to get a Request from the pool and initialize it
+	return getRequest(r)
 }
 
 // Context returns the request's context.
@@ -124,7 +81,7 @@ func (r *Request) WithContext(ctx context.Context) *Request {
 
 // UserAgent returns the client's User-Agent header.
 func (r *Request) UserAgent() string {
-	return r.Header.Get("User-Agent")
+	return r.Header.Get(HeaderUserAgent)
 }
 
 func (r *Request) SetContext(ctx context.Context) {

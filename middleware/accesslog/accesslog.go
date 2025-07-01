@@ -63,8 +63,8 @@ func New(config ...Config) interface{} {
 		status := c.StatusCode()
 		ip := c.IP()
 		bytesIn := c.Request.ContentLength
-		userAgent := c.Get("User-Agent")
-		referer := c.Get("Referer")
+		userAgent := c.Get(ngebut.HeaderUserAgent)
+		referer := c.Get(ngebut.HeaderReferer)
 		query := c.Request.URL.RawQuery
 
 		// Format the log message

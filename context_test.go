@@ -119,7 +119,7 @@ func TestBindForm_TextPlainForm(t *testing.T) {
 // TestError tests the Error method
 func TestError(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -144,7 +144,7 @@ func TestError(t *testing.T) {
 // TestGetError tests the GetError method
 func TestGetError(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -162,7 +162,7 @@ func TestGetError(t *testing.T) {
 // TestStatusCode tests the StatusCode method
 func TestStatusCode(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -179,7 +179,7 @@ func TestStatusCode(t *testing.T) {
 // TestHeader tests the Header method
 func TestHeader(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -196,20 +196,20 @@ func TestHeader(t *testing.T) {
 // TestMethod tests the Method method
 func TestMethod(t *testing.T) {
 	// Create a context with a GET request
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
 	// Check that Method returns "GET"
-	assert.Equal(t, "GET", ctx.Method(), "Method should return GET")
+	assert.Equal(t, MethodGet, ctx.Method(), "Method should return GET")
 
 	// Create a context with a POST request
-	req, _ = http.NewRequest("POST", "/test", nil)
+	req, _ = http.NewRequest(MethodPost, "/test", nil)
 	res = httptest.NewRecorder()
 	ctx = GetContext(res, req)
 
 	// Check that Method returns "POST"
-	assert.Equal(t, "POST", ctx.Method(), "Method should return POST")
+	assert.Equal(t, MethodPost, ctx.Method(), "Method should return POST")
 
 	// Test with nil Request
 	ctx.Request = nil
@@ -219,7 +219,7 @@ func TestMethod(t *testing.T) {
 // TestPath tests the Path method
 func TestPath(t *testing.T) {
 	// Create a context with a request to /test
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -227,7 +227,7 @@ func TestPath(t *testing.T) {
 	assert.Equal(t, "/test", ctx.Path(), "Path should return the request path")
 
 	// Create a context with a request to /users/123
-	req, _ = http.NewRequest("GET", "/users/123", nil)
+	req, _ = http.NewRequest(MethodGet, "/users/123", nil)
 	res = httptest.NewRecorder()
 	ctx = GetContext(res, req)
 
@@ -242,8 +242,8 @@ func TestPath(t *testing.T) {
 // TestIP tests the IP method
 func TestIP(t *testing.T) {
 	// Create a context with X-Forwarded-For header
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("X-Forwarded-For", "192.168.1.1, 10.0.0.1")
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
+	req.Header.Set(HeaderXForwardedFor, "192.168.1.1, 10.0.0.1")
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -251,7 +251,7 @@ func TestIP(t *testing.T) {
 	assert.Equal(t, "192.168.1.1", ctx.IP(), "IP should return the first IP in X-Forwarded-For")
 
 	// Create a context with X-Real-IP header
-	req, _ = http.NewRequest("GET", "/test", nil)
+	req, _ = http.NewRequest(MethodGet, "/test", nil)
 	req.Header.Set("X-Real-IP", "192.168.1.2")
 	res = httptest.NewRecorder()
 	ctx = GetContext(res, req)
@@ -260,7 +260,7 @@ func TestIP(t *testing.T) {
 	assert.Equal(t, "192.168.1.2", ctx.IP(), "IP should return the X-Real-IP")
 
 	// Create a context with RemoteAddr
-	req, _ = http.NewRequest("GET", "/test", nil)
+	req, _ = http.NewRequest(MethodGet, "/test", nil)
 	req.RemoteAddr = "192.168.1.3:1234"
 	res = httptest.NewRecorder()
 	ctx = GetContext(res, req)
@@ -282,7 +282,7 @@ func TestIP(t *testing.T) {
 // TestRemoteAddr tests the RemoteAddr method
 func TestRemoteAddr(t *testing.T) {
 	// Create a context with RemoteAddr
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	req.RemoteAddr = "192.168.1.1:1234"
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
@@ -298,8 +298,8 @@ func TestRemoteAddr(t *testing.T) {
 // TestUserAgent tests the UserAgent method
 func TestUserAgent(t *testing.T) {
 	// Create a context with User-Agent header
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
+	req.Header.Set(HeaderUserAgent, "Mozilla/5.0")
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -314,8 +314,8 @@ func TestUserAgent(t *testing.T) {
 // TestReferer tests the Referer method
 func TestReferer(t *testing.T) {
 	// Create a context with Referer header
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Referer", "http://example.com")
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
+	req.Header.Set(HeaderReferer, "http://example.com")
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -330,7 +330,7 @@ func TestReferer(t *testing.T) {
 // TestHost tests the Host method
 func TestHost(t *testing.T) {
 	// Create a context with Host header
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	req.Host = "example.com"
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
@@ -339,8 +339,8 @@ func TestHost(t *testing.T) {
 	assert.Equal(t, "example.com", ctx.Host(), "Host should return the Host header")
 
 	// Create a context with X-Forwarded-Host header
-	req, _ = http.NewRequest("GET", "/test", nil)
-	req.Header.Set("X-Forwarded-Host", "forwarded.example.com")
+	req, _ = http.NewRequest(MethodGet, "/test", nil)
+	req.Header.Set(HeaderXForwardedHost, "forwarded.example.com")
 	res = httptest.NewRecorder()
 	ctx = GetContext(res, req)
 
@@ -355,7 +355,7 @@ func TestHost(t *testing.T) {
 // TestProtocol tests the Protocol method
 func TestProtocol(t *testing.T) {
 	// Create a context with HTTPS scheme
-	req, _ := http.NewRequest("GET", "https://example.com/test", nil)
+	req, _ := http.NewRequest(MethodGet, "https://example.com/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -363,7 +363,7 @@ func TestProtocol(t *testing.T) {
 	assert.Equal(t, "https", ctx.Protocol(), "Protocol should return https")
 
 	// Create a context with HTTP scheme
-	req, _ = http.NewRequest("GET", "http://example.com/test", nil)
+	req, _ = http.NewRequest(MethodGet, "http://example.com/test", nil)
 	res = httptest.NewRecorder()
 	ctx = GetContext(res, req)
 
@@ -371,8 +371,8 @@ func TestProtocol(t *testing.T) {
 	assert.Equal(t, "http", ctx.Protocol(), "Protocol should return http")
 
 	// Create a context with X-Forwarded-Proto header
-	req, _ = http.NewRequest("GET", "http://example.com/test", nil)
-	req.Header.Set("X-Forwarded-Proto", "https")
+	req, _ = http.NewRequest(MethodGet, "http://example.com/test", nil)
+	req.Header.Set(HeaderXForwardedProto, "https")
 	res = httptest.NewRecorder()
 	ctx = GetContext(res, req)
 
@@ -387,7 +387,7 @@ func TestProtocol(t *testing.T) {
 // TestStatus tests the Status method
 func TestStatus(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -404,7 +404,7 @@ func TestStatus(t *testing.T) {
 // TestSetGet tests the Set and Get methods
 func TestSetGet(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -427,7 +427,7 @@ func TestSetGet(t *testing.T) {
 // TestQuery tests the Query method
 func TestQuery(t *testing.T) {
 	// Create a context with query parameters
-	req, _ := http.NewRequest("GET", "/test?name=John&age=30", nil)
+	req, _ := http.NewRequest(MethodGet, "/test?name=John&age=30", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -446,7 +446,7 @@ func TestQuery(t *testing.T) {
 // TestQueryArray tests the QueryArray method
 func TestQueryArray(t *testing.T) {
 	// Create a context with query parameters
-	req, _ := http.NewRequest("GET", "/test?name=John&name=Jane&age=30", nil)
+	req, _ := http.NewRequest(MethodGet, "/test?name=John&name=Jane&age=30", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -469,7 +469,7 @@ func TestQueryArray(t *testing.T) {
 // TestString tests the String method
 func TestString(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -477,16 +477,16 @@ func TestString(t *testing.T) {
 	ctx.String("Hello, %s!", "World")
 
 	// Check that the response body was set
-	assert.Equal(t, "Hello, World!", string(ctx.body), "String should set the response body")
+	assert.Equal(t, "Hello, World!", res.Body.String(), "String should set the response body")
 
 	// Check that the Content-Type header was set
-	assert.Equal(t, "text/plain; charset=utf-8", ctx.Get("Content-Type"), "String should set the Content-Type header")
+	assert.Equal(t, MIMETextPlainCharsetUTF8, ctx.Get(HeaderContentType), "String should set the Content-Type header")
 }
 
 // TestJSON tests the JSON method
 func TestJSON(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -500,16 +500,16 @@ func TestJSON(t *testing.T) {
 
 	// Check that the response body was set
 	expectedJSON := `{"name":"John","age":30}`
-	assert.Equal(t, expectedJSON, string(ctx.body), "JSON should set the response body")
+	assert.Equal(t, expectedJSON, strings.TrimSpace(res.Body.String()), "JSON should set the response body")
 
 	// Check that the Content-Type header was set
-	assert.Equal(t, "application/json; charset=utf-8", ctx.Get("Content-Type"), "JSON should set the Content-Type header")
+	assert.Equal(t, MIMEApplicationJSONCharsetUTF8, ctx.Get(HeaderContentType), "JSON should set the Content-Type header")
 }
 
 // TestHTML tests the HTML method
 func TestHTML(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -517,34 +517,34 @@ func TestHTML(t *testing.T) {
 	ctx.HTML("<h1>Hello, World!</h1>")
 
 	// Check that the response body was set
-	assert.Equal(t, "<h1>Hello, World!</h1>", string(ctx.body), "HTML should set the response body")
+	assert.Equal(t, "<h1>Hello, World!</h1>", res.Body.String(), "HTML should set the response body")
 
 	// Check that the Content-Type header was set
-	assert.Equal(t, "text/html; charset=utf-8", ctx.Get("Content-Type"), "HTML should set the Content-Type header")
+	assert.Equal(t, MIMETextHTMLCharsetUTF8, ctx.Get(HeaderContentType), "HTML should set the Content-Type header")
 }
 
 // TestData tests the Data method
 func TestData(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
 	// Set a binary response
 	data := []byte{0x01, 0x02, 0x03, 0x04}
-	ctx.Data("application/octet-stream", data)
+	ctx.Data(MIMEOctetStream, data)
 
 	// Check that the response body was set
-	assert.Equal(t, data, ctx.body, "Data should set the response body")
+	assert.Equal(t, data, res.Body.Bytes(), "Data should set the response body")
 
 	// Check that the Content-Type header was set
-	assert.Equal(t, "application/octet-stream", ctx.Get("Content-Type"), "Data should set the Content-Type header")
+	assert.Equal(t, MIMEOctetStream, ctx.Get(HeaderContentType), "Data should set the Content-Type header")
 }
 
 // TestUserData tests the UserData method
 func TestUserData(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -569,7 +569,7 @@ func TestUserData(t *testing.T) {
 // TestNext tests the Next method
 func TestNext(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -623,7 +623,7 @@ func TestNext(t *testing.T) {
 // TestGetContextReleaseContext tests the GetContext and ReleaseContext functions
 func TestGetContextReleaseContext(t *testing.T) {
 	// Create a request and response
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 
 	// Get a context
@@ -641,7 +641,6 @@ func TestGetContextReleaseContext(t *testing.T) {
 	ctx.statusCode = StatusNotFound
 	ctx.err = errors.New("test error")
 	ctx.Set("X-Test", "test-value")
-	ctx.body = append(ctx.body, []byte("test body")...)
 	ctx.middlewareStack = append(ctx.middlewareStack, func(c *Ctx) {})
 	ctx.middlewareIndex = 0
 	ctx.handler = func(c *Ctx) {}
@@ -656,7 +655,6 @@ func TestGetContextReleaseContext(t *testing.T) {
 	assert.Equal(t, StatusOK, ctx2.statusCode, "ctx2.statusCode should be StatusOK")
 	assert.Nil(t, ctx2.err, "ctx2.err should be nil")
 	assert.Equal(t, 0, len(*ctx2.Request.Header), "ctx2.header should be empty")
-	assert.Empty(t, ctx2.body, "ctx2.body should be empty")
 	assert.Empty(t, ctx2.middlewareStack, "ctx2.middlewareStack should be empty")
 	assert.Equal(t, -1, ctx2.middlewareIndex, "ctx2.middlewareIndex should be -1")
 	assert.Nil(t, ctx2.handler, "ctx2.handler should be nil")
@@ -668,7 +666,7 @@ func TestGetContextReleaseContext(t *testing.T) {
 // TestCopyHeadersToWriter tests the copyHeadersToWriter method
 func TestCopyHeadersToWriter(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -696,7 +694,7 @@ func TestCopyHeadersToWriter(t *testing.T) {
 // TestWrite tests the write method
 func TestWrite(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -708,8 +706,8 @@ func TestWrite(t *testing.T) {
 	assert.NoError(t, err, "write should not return an error")
 	assert.Equal(t, len(data), n, "write should return the correct number of bytes written")
 
-	// Check that the data was written to the body
-	assert.Equal(t, data, ctx.body, "data should be written to the body")
+	// Check that the data was written to the response writer
+	assert.Equal(t, data, res.Body.Bytes(), "data should be written to the response writer")
 
 	// Write more data
 	moreData := []byte(" more data")
@@ -719,15 +717,15 @@ func TestWrite(t *testing.T) {
 	assert.NoError(t, err, "write should not return an error")
 	assert.Equal(t, len(moreData), n, "write should return the correct number of bytes written")
 
-	// Check that the data was appended to the body
+	// Check that the data was appended to the response writer
 	expectedData := append(data, moreData...)
-	assert.Equal(t, expectedData, ctx.body, "data should be appended to the body")
+	assert.Equal(t, expectedData, res.Body.Bytes(), "data should be appended to the response writer")
 }
 
 // TestParam tests the Param method
 func TestParam(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -739,14 +737,14 @@ func TestParam(t *testing.T) {
 	assert.Equal(t, "", ctx.Param("id"), "Param should return empty string when Request is nil")
 
 	// Create a request with parameters
-	req, _ = http.NewRequest("GET", "/users/123", nil)
+	req, _ = http.NewRequest(MethodGet, "/users/123", nil)
 	res = httptest.NewRecorder()
 	ctx = GetContext(res, req)
 
 	// Manually set up the parameter context
 	paramCtx := make(map[paramKey]string)
 	paramCtx[paramKey("id")] = "123"
-	ctx.Request.SetContext(context.WithValue(ctx.Request.Context(), paramContextKey{}, paramCtx))
+	ctx.Request.SetContext(context.WithValue(ctx.Request.Context(), paramCtxKey, paramCtx))
 
 	// Test getting a parameter
 	assert.Equal(t, "123", ctx.Param("id"), "Param should return the parameter value")
@@ -758,7 +756,7 @@ func TestParam(t *testing.T) {
 // TestGetParam tests the GetParam method
 func TestGetParam(t *testing.T) {
 	// Create a context
-	req, _ := http.NewRequest("GET", "/test", nil)
+	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()
 	ctx := GetContext(res, req)
 
@@ -770,14 +768,14 @@ func TestGetParam(t *testing.T) {
 	assert.Equal(t, "", ctx.GetParam("id"), "GetParam should return empty string when Request is nil")
 
 	// Create a request with parameters
-	req, _ = http.NewRequest("GET", "/users/123", nil)
+	req, _ = http.NewRequest(MethodGet, "/users/123", nil)
 	res = httptest.NewRecorder()
 	ctx = GetContext(res, req)
 
 	// Manually set up the parameter context
 	paramCtx := make(map[paramKey]string)
 	paramCtx[paramKey("id")] = "123"
-	ctx.Request.SetContext(context.WithValue(ctx.Request.Context(), paramContextKey{}, paramCtx))
+	ctx.Request.SetContext(context.WithValue(ctx.Request.Context(), paramCtxKey, paramCtx))
 
 	// Test getting a parameter
 	assert.Equal(t, "123", ctx.GetParam("id"), "GetParam should return the parameter value")

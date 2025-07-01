@@ -38,7 +38,6 @@ type Config struct {
 // Pre-defined constants to avoid string allocations
 const (
 	wildcard       = "*"
-	originHeader   = "Origin"
 	trueValue      = "true"
 	defaultMethods = "GET,POST,PUT,DELETE,HEAD,OPTIONS,PATCH"
 	emptyString    = ""
@@ -119,10 +118,10 @@ func New(config ...Config) ngebut.Middleware {
 
 			if originAllowed || wildcardAllowed {
 				c.Set(ngebut.HeaderAccessControlAllowOrigin, origin)
-				c.Set(ngebut.HeaderVary, originHeader)
+				c.Set(ngebut.HeaderVary, ngebut.HeaderOrigin)
 			} else {
 				// Origin not allowed, but still set Vary header
-				c.Set(ngebut.HeaderVary, originHeader)
+				c.Set(ngebut.HeaderVary, ngebut.HeaderOrigin)
 			}
 		}
 

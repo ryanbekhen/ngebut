@@ -62,35 +62,35 @@ func TestRouterHandle(t *testing.T) {
 		// Handler function
 	}
 
-	result := router.Handle("/users", "GET", handler)
+	result := router.Handle("/users", MethodGet, handler)
 	assert.Equal(router, result, "Router.Handle() should return the router")
 	assert.Len(router.Routes, 1, "should have 1 route")
 
 	route := router.Routes[0]
 	assert.Equal("/users", route.Pattern, "route pattern should match")
-	assert.Equal("GET", route.Method, "route method should match")
+	assert.Equal(MethodGet, route.Method, "route method should match")
 	assert.Len(route.Handlers, 1, "should have 1 handler")
 	assert.NotNil(route.Regex, "route.Regex should not be nil")
 
 	// Test with pattern containing parameters
-	router.Handle("/users/:id", "POST", handler)
+	router.Handle("/users/:id", MethodPost, handler)
 	assert.Len(router.Routes, 2, "should have 2 routes")
 
 	route = router.Routes[1]
 	assert.Equal("/users/:id", route.Pattern, "route pattern should match")
-	assert.Equal("POST", route.Method, "route method should match")
+	assert.Equal(MethodPost, route.Method, "route method should match")
 	assert.NotNil(route.Regex, "route.Regex should not be nil")
 
 	// Test with multiple handlers
 	handler2 := func(c *Ctx) {
 		// Another handler
 	}
-	router.Handle("/multi", "DELETE", handler, handler2)
+	router.Handle("/multi", MethodDelete, handler, handler2)
 	assert.Len(router.Routes, 3, "should have 3 routes")
 
 	route = router.Routes[2]
 	assert.Equal("/multi", route.Pattern, "route pattern should match")
-	assert.Equal("DELETE", route.Method, "route method should match")
+	assert.Equal(MethodDelete, route.Method, "route method should match")
 	assert.Len(route.Handlers, 2, "should have 2 handlers")
 }
 
@@ -104,39 +104,39 @@ func TestRouterHTTPMethods(t *testing.T) {
 	result := router.GET("/users", handler)
 	assert.Equal(router, result, "Router.GET() should return the router")
 	assert.Len(router.Routes, 1, "should have 1 route")
-	assert.Equal("GET", router.Routes[0].Method, "method should be GET")
+	assert.Equal(MethodGet, router.Routes[0].Method, "method should be GET")
 
 	// Test HEAD
 	router.HEAD("/users", handler)
-	assert.Equal("HEAD", router.Routes[1].Method, "method should be HEAD")
+	assert.Equal(MethodHead, router.Routes[1].Method, "method should be HEAD")
 
 	// Test POST
 	router.POST("/users", handler)
-	assert.Equal("POST", router.Routes[2].Method, "method should be POST")
+	assert.Equal(MethodPost, router.Routes[2].Method, "method should be POST")
 
 	// Test PUT
 	router.PUT("/users", handler)
-	assert.Equal("PUT", router.Routes[3].Method, "method should be PUT")
+	assert.Equal(MethodPut, router.Routes[3].Method, "method should be PUT")
 
 	// Test DELETE
 	router.DELETE("/users", handler)
-	assert.Equal("DELETE", router.Routes[4].Method, "method should be DELETE")
+	assert.Equal(MethodDelete, router.Routes[4].Method, "method should be DELETE")
 
 	// Test CONNECT
 	router.CONNECT("/users", handler)
-	assert.Equal("CONNECT", router.Routes[5].Method, "method should be CONNECT")
+	assert.Equal(MethodConnect, router.Routes[5].Method, "method should be CONNECT")
 
 	// Test OPTIONS
 	router.OPTIONS("/users", handler)
-	assert.Equal("OPTIONS", router.Routes[6].Method, "method should be OPTIONS")
+	assert.Equal(MethodOptions, router.Routes[6].Method, "method should be OPTIONS")
 
 	// Test TRACE
 	router.TRACE("/users", handler)
-	assert.Equal("TRACE", router.Routes[7].Method, "method should be TRACE")
+	assert.Equal(MethodTrace, router.Routes[7].Method, "method should be TRACE")
 
 	// Test PATCH
 	router.PATCH("/users", handler)
-	assert.Equal("PATCH", router.Routes[8].Method, "method should be PATCH")
+	assert.Equal(MethodPatch, router.Routes[8].Method, "method should be PATCH")
 }
 
 // TestRouterServeHTTP tests the ServeHTTP method of Router
@@ -152,7 +152,7 @@ func TestRouterServeHTTP(t *testing.T) {
 	})
 
 	// Create a request
-	req, _ := http.NewRequest("GET", "http://example.com/users", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/users", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -183,7 +183,7 @@ func TestRouterServeHTTPWithParams(t *testing.T) {
 	})
 
 	// Create a request
-	req, _ := http.NewRequest("GET", "http://example.com/users/123", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/users/123", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -207,7 +207,7 @@ func TestRouterServeHTTPNotFound(t *testing.T) {
 	router := NewRouter()
 
 	// Create a request for a non-existent route
-	req, _ := http.NewRequest("GET", "http://example.com/nonexistent", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/nonexistent", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -233,7 +233,7 @@ func TestRouterServeHTTPMethodNotAllowed(t *testing.T) {
 	})
 
 	// Create a request with a different method
-	req, _ := http.NewRequest("POST", "http://example.com/users", nil)
+	req, _ := http.NewRequest(MethodPost, "http://example.com/users", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -246,7 +246,7 @@ func TestRouterServeHTTPMethodNotAllowed(t *testing.T) {
 	// Check the response
 	assert.Equal(StatusMethodNotAllowed, w.Code, "status code should be StatusMethodNotAllowed")
 	assert.Equal("Method Not Allowed", w.Body.String(), "response body should match")
-	assert.Equal("GET", w.Header().Get("Allow"), "Allow header should be GET")
+	assert.Equal(MethodGet, w.Header().Get(HeaderAllow), "Allow header should be GET")
 }
 
 // TestRouterServeHTTPWithMiddleware tests the ServeHTTP method of Router with middleware
@@ -269,7 +269,7 @@ func TestRouterServeHTTPWithMiddleware(t *testing.T) {
 	})
 
 	// Create a request
-	req, _ := http.NewRequest("GET", "http://example.com/users", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/users", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -340,7 +340,7 @@ func TestRouterSTATIC(t *testing.T) {
 
 	route := router.Routes[0]
 	assert.Equal("/assets/*", route.Pattern, "route pattern should match")
-	assert.Equal("GET", route.Method, "route method should be GET")
+	assert.Equal(MethodGet, route.Method, "route method should be GET")
 	assert.Len(route.Handlers, 1, "should have 1 handler")
 }
 
@@ -373,7 +373,7 @@ func TestStaticFileServing(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets")
 
 	// Test serving index.html
-	req, _ := http.NewRequest("GET", "http://example.com/assets/index.html", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/index.html", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -394,7 +394,7 @@ func TestStaticFileServingWithDefaultIndex(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets")
 
 	// Test serving directory (should serve index.html)
-	req, _ := http.NewRequest("GET", "http://example.com/assets/", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -415,7 +415,7 @@ func TestStaticFileServingCSS(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets")
 
 	// Test serving CSS file
-	req, _ := http.NewRequest("GET", "http://example.com/assets/css/style.css", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/css/style.css", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -436,7 +436,7 @@ func TestStaticFileServingJS(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets")
 
 	// Test serving JS file
-	req, _ := http.NewRequest("GET", "http://example.com/assets/js/app.js", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/js/app.js", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -457,7 +457,7 @@ func TestStaticFileServingTextFile(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets")
 
 	// Test serving text file
-	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/sample.txt", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -478,7 +478,7 @@ func TestStaticFileNotFound(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets")
 
 	// Test non-existent file
-	req, _ := http.NewRequest("GET", "http://example.com/assets/nonexistent.txt", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/nonexistent.txt", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -498,7 +498,7 @@ func TestStaticDirectoryBrowsingDisabled(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets")
 
 	// Test directory without index file (css directory)
-	req, _ := http.NewRequest("GET", "http://example.com/assets/css/", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/css/", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -521,7 +521,7 @@ func TestStaticDirectoryBrowsingEnabled(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets", config)
 
 	// Test directory listing
-	req, _ := http.NewRequest("GET", "http://example.com/assets/css/", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/css/", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -546,7 +546,7 @@ func TestStaticByteRangeRequests(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets", config)
 
 	// Test byte range request
-	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/sample.txt", nil)
 	req.Header.Set("Range", "bytes=0-10")
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
@@ -580,7 +580,7 @@ func TestStaticMaxAge(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets", config)
 
 	// Test cache headers
-	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/sample.txt", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -603,7 +603,7 @@ func TestStaticDownload(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets", config)
 
 	// Test download headers
-	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/sample.txt", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -634,7 +634,7 @@ func TestStaticNext(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets", config)
 
 	// Test normal file serving (Next returns false)
-	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/sample.txt", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -649,7 +649,7 @@ func TestStaticNext(t *testing.T) {
 	nextCallCount = 0
 
 	// Test that .private files are skipped (Next returns true)
-	req, _ = http.NewRequest("GET", "http://example.com/assets/secret.private", nil)
+	req, _ = http.NewRequest(MethodGet, "http://example.com/assets/secret.private", nil)
 	w = httptest.NewRecorder()
 	ctx = GetContext(w, req)
 
@@ -679,7 +679,7 @@ func TestStaticModifyResponse(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets", config)
 
 	// Test that ModifyResponse is called
-	req, _ := http.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/sample.txt", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 
@@ -699,7 +699,7 @@ func TestStaticSecurityPathTraversal(t *testing.T) {
 	router.STATIC("/assets", "examples/static/assets")
 
 	// Test directory traversal attempt
-	req, _ := http.NewRequest("GET", "http://example.com/assets/../../../config.go", nil)
+	req, _ := http.NewRequest(MethodGet, "http://example.com/assets/../../../config.go", nil)
 	w := httptest.NewRecorder()
 	ctx := GetContext(w, req)
 

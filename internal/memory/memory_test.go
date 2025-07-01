@@ -87,11 +87,11 @@ func TestGet(t *testing.T) {
 
 	// Test getting a non-existent key
 	_, err = s.Get(ctx, "nonexistent")
-	assert.Equal(t, ngebut.ErrNotFound, err, "Get for nonexistent key should return ErrNotFound")
+	assert.Equal(t, ErrNotFound, err, "Get for nonexistent key should return ErrNotFound")
 
 	// Test getting an expired key
 	_, err = s.Get(ctx, "expired")
-	assert.Equal(t, ngebut.ErrNotFound, err, "Get for expired key should return ErrNotFound")
+	assert.Equal(t, ErrNotFound, err, "Get for expired key should return ErrNotFound")
 }
 
 // TestDelete tests the Delete method

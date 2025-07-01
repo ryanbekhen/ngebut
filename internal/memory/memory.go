@@ -2,11 +2,13 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
-
-	"github.com/ryanbekhen/ngebut"
 )
+
+// ErrNotFound is returned when a key is not found in the storage.
+var ErrNotFound = errors.New("key not found")
 
 // item represents a stored item with its value and expiration time.
 type item struct {
@@ -80,7 +82,7 @@ func (s *Storage) Get(_ context.Context, key string) ([]byte, error) {
 
 	item, exists := s.items[key]
 	if !exists {
-		return nil, ngebut.ErrNotFound
+		return nil, ErrNotFound
 	}
 
 	// Check if the item has expired
@@ -92,7 +94,7 @@ func (s *Storage) Get(_ context.Context, key string) ([]byte, error) {
 		delete(s.items, key)
 		s.mu.Unlock()
 		s.mu.RLock()
-		return nil, ngebut.ErrNotFound
+		return nil, ErrNotFound
 	}
 
 	// Return a copy of the value to prevent modification of the stored value
