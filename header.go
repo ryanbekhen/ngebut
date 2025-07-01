@@ -18,34 +18,27 @@ type Header map[string][]string
 // It appends to any existing values associated with key.
 // The key is case insensitive; it is canonicalized by
 // textproto.CanonicalMIMEHeaderKey.
+// This optimized version reduces allocations by appending directly when possible.
 func (h Header) Add(key, value string) {
 	key = textproto.CanonicalMIMEHeaderKey(key)
 
-	// Use a shorter critical section
-	headerMutex.RLock()
+	// Use a single lock for the entire operation to avoid race conditions
+	// This is simpler and often more efficient than using multiple locks
+	headerMutex.Lock()
+	defer headerMutex.Unlock()
+
+	// Check if the key exists
 	values, exists := h[key]
-	headerMutex.RUnlock()
 
-	if !exists {
+	if !exists || values == nil {
 		// Need to create a new entry
-		headerMutex.Lock()
-		// Check again in case another goroutine added it
-		if h[key] == nil {
-			h[key] = []string{value}
-		} else {
-			h[key] = append(h[key], value)
-		}
-		headerMutex.Unlock()
-	} else {
-		// Append to existing values
-		newValues := make([]string, len(values), len(values)+1)
-		copy(newValues, values)
-		newValues = append(newValues, value)
-
-		headerMutex.Lock()
-		h[key] = newValues
-		headerMutex.Unlock()
+		h[key] = []string{value}
+		return
 	}
+
+	// Append to existing values
+	// This will only allocate a new backing array if the capacity is exceeded
+	h[key] = append(values, value)
 }
 
 // Set sets the header entries associated with key to the
@@ -88,6 +81,7 @@ func (h Header) Get(key string) string {
 // used to canonicalize the provided key. To use non-canonical
 // keys, access the map directly.
 // The returned slice is a copy to avoid concurrent modification issues.
+// This optimized version avoids unnecessary copying for single-value headers.
 func (h Header) Values(key string) []string {
 	key = textproto.CanonicalMIMEHeaderKey(key)
 
@@ -95,11 +89,18 @@ func (h Header) Values(key string) []string {
 	values := h[key]
 	headerMutex.RUnlock()
 
-	// Return a copy to avoid concurrent modification issues
+	// Fast path for empty values
 	if len(values) == 0 {
 		return nil
 	}
 
+	// Fast path for single-value headers (common case)
+	// Return a new slice with the same backing array
+	if len(values) == 1 {
+		return values[:1:1] // Create a slice with capacity=1 to prevent appends
+	}
+
+	// For multi-value headers, create a copy to avoid concurrent modification
 	result := make([]string, len(values))
 	copy(result, values)
 	return result
@@ -173,41 +174,54 @@ func (h Header) Clone() Header {
 
 // WriteSubset writes a header in wire format.
 // If exclude is not nil, keys where exclude[key] == true are not written.
+// This optimized version reduces allocations by avoiding unnecessary copying.
 func (h Header) WriteSubset(w stringWriter, exclude map[string]bool) error {
-	// First, get a snapshot of the keys and values
+	// First, get a snapshot of the keys to process
 	// This reduces the time we hold the read lock
 	headerMutex.RLock()
-	// Pre-allocate to avoid resizing
-	keyValuePairs := make([]struct {
-		key    string
-		values []string
-	}, 0, len(h))
 
-	for key, values := range h {
-		if exclude != nil && exclude[key] {
-			continue
+	// Pre-allocate keys slice to avoid resizing
+	keys := make([]string, 0, len(h))
+	for key := range h {
+		if exclude == nil || !exclude[key] {
+			keys = append(keys, key)
 		}
-		// Make a copy of values to avoid concurrent modification
-		valuesCopy := make([]string, len(values))
-		copy(valuesCopy, values)
-		keyValuePairs = append(keyValuePairs, struct {
-			key    string
-			values []string
-		}{key, valuesCopy})
 	}
 	headerMutex.RUnlock()
 
-	// Now write the headers without holding the lock
-	for _, pair := range keyValuePairs {
-		for _, v := range pair.values {
-			v = strings.TrimSpace(v)
-			v = strings.ReplaceAll(v, "\n", " ")
-			v = strings.ReplaceAll(v, "\r", " ")
-			if _, err := w.WriteString(pair.key + ": " + v + "\r\n"); err != nil {
+	// Process each key individually with minimal locking
+	for _, key := range keys {
+		// Get the values for this key
+		headerMutex.RLock()
+		values, exists := h[key]
+		if !exists || len(values) == 0 {
+			headerMutex.RUnlock()
+			continue
+		}
+
+		// Create a reference to the values slice to use outside the lock
+		// This avoids copying the entire slice
+		valuesCopy := values
+		headerMutex.RUnlock()
+
+		// Write each value
+		for _, v := range valuesCopy {
+			// Clean the value (trim spaces, replace newlines)
+			// Only allocate a new string if necessary
+			cleaned := v
+			if strings.ContainsAny(v, "\r\n ") {
+				cleaned = strings.TrimSpace(v)
+				cleaned = strings.ReplaceAll(cleaned, "\n", " ")
+				cleaned = strings.ReplaceAll(cleaned, "\r", " ")
+			}
+
+			// Write the header line
+			if _, err := w.WriteString(key + ": " + cleaned + "\r\n"); err != nil {
 				return err
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -216,18 +230,32 @@ func (h Header) Write(w stringWriter) error {
 	return h.WriteSubset(w, nil)
 }
 
-// NewHeader creates a new empty Header.
+// NewHeader creates a new empty Header with pre-allocated capacity.
 func NewHeader() *Header {
-	h := make(Header)
+	h := make(Header, 8) // Pre-allocate with capacity for common headers
 	return &h
 }
 
 // NewHeaderFromMap creates a new Header from a map[string][]string.
+// This optimized version avoids unnecessary copying of values when possible.
 func NewHeaderFromMap(m map[string][]string) *Header {
-	h := make(Header, len(m))
-	for k, v := range m {
-		h[k] = v
+	// Fast path for empty map
+	if len(m) == 0 {
+		h := make(Header, 0)
+		return &h
 	}
+
+	// Pre-allocate with exact size
+	h := make(Header, len(m))
+
+	// Copy only non-empty values
+	for k, v := range m {
+		if len(v) == 0 {
+			continue
+		}
+		h[k] = v // Direct reference, no copy
+	}
+
 	return &h
 }
 

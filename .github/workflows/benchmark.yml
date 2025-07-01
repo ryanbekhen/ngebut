@@ -1,0 +1,182 @@
+name: Benchmark
+
+# This workflow runs benchmarks on pull requests to the main branch
+# and fails if any benchmark is more than 5% slower than the base branch.
+# It compares the ns/op (nanoseconds per operation) metric.
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches:
+      - perf/*
+
+jobs:
+  benchmark:
+    name: Performance Regression Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout PR
+      uses: actions/checkout@v3
+      with:
+        path: pr
+
+    - name: Checkout base branch
+      uses: actions/checkout@v3
+      with:
+        ref: ${{ github.base_ref }}
+        path: base
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24'
+
+    - name: Run benchmarks on base branch
+      run: |
+        cd base
+        go mod download
+        echo "Running benchmarks..."
+        echo "1. Running BenchmarkResponses (Large JSON Response)..."
+        go test -bench=BenchmarkResponses/Large_JSON_Response -benchmem -count=5 -run=^$ | tee benchmark_results.txt
+
+        echo "2. Running BenchmarkStaticFileServing (HTML File)..."
+        go test -bench=BenchmarkStaticFileServing/HTML_File -benchmem -count=5 -run=^$ | tee -a benchmark_results.txt
+
+        mkdir -p /tmp/benchmark
+        cp benchmark_results.txt /tmp/benchmark/base_results.txt
+
+    - name: Run benchmarks on PR
+      run: |
+        cd pr
+        go mod download
+        echo "Running benchmarks..."
+        echo "1. Running BenchmarkResponses (Large JSON Response)..."
+        go test -bench=BenchmarkResponses/Large_JSON_Response -benchmem -count=5 -run=^$ | tee benchmark_results.txt
+
+        echo "2. Running BenchmarkStaticFileServing (HTML File)..."
+        go test -bench=BenchmarkStaticFileServing/HTML_File -benchmem -count=5 -run=^$ | tee -a benchmark_results.txt
+
+        cp benchmark_results.txt /tmp/benchmark/pr_results.txt
+
+    - name: Compare benchmark results
+      run: |
+        cd pr
+        go install golang.org/x/perf/cmd/benchstat@latest
+
+        echo "Comparing benchmark results..."
+        benchstat /tmp/benchmark/base_results.txt /tmp/benchmark/pr_results.txt
+
+        # Extract ns/op values and check for regressions
+        echo "Checking for performance regressions..."
+
+        # Create a comparison report for the artifact
+        echo "# Benchmark Comparison Report" > /tmp/benchmark/comparison.md
+        echo "## Base Branch vs PR" >> /tmp/benchmark/comparison.md
+        echo '```' >> /tmp/benchmark/comparison.md
+        benchstat /tmp/benchmark/base_results.txt /tmp/benchmark/pr_results.txt >> /tmp/benchmark/comparison.md
+        echo '```' >> /tmp/benchmark/comparison.md
+
+        # Create a script to analyze benchmark results
+        cat > /tmp/analyze_benchmarks.go <<'EOF'
+        // This script analyzes benchmark results from the base branch and PR
+        // It compares the ns/op (nanoseconds per operation) metric
+        // and fails if any benchmark is more than 5% slower in the PR
+        package main
+
+        import (
+            "bufio"
+            "fmt"
+            "os"
+            "regexp"
+            "strconv"
+        )
+
+        // main function compares benchmark results from the base branch and PR
+        // It calculates the percentage change in ns/op for each benchmark
+        // If any benchmark is more than 5% slower in the PR, it exits with a non-zero status code
+        func main() {
+            // Open the base branch benchmark results
+            baseFile, err := os.Open("/tmp/benchmark/base_results.txt")
+            if err != nil {
+                fmt.Printf("Error opening base results: %v\n", err)
+                os.Exit(1)
+            }
+            defer baseFile.Close()
+
+            // Open the PR benchmark results
+            prFile, err := os.Open("/tmp/benchmark/pr_results.txt")
+            if err != nil {
+                fmt.Printf("Error opening PR results: %v\n", err)
+                os.Exit(1)
+            }
+            defer prFile.Close()
+
+            // Parse the benchmark results
+            baseResults := parseResults(baseFile)
+            prResults := parseResults(prFile)
+
+            hasRegression := false
+
+            // Compare each benchmark
+            for benchmark, baseValue := range baseResults {
+                if prValue, ok := prResults[benchmark]; ok {
+                    // Calculate the percentage change
+                    percentChange := ((prValue - baseValue) / baseValue) * 100
+                    fmt.Printf("%s: %.2f ns/op -> %.2f ns/op (%.2f%%)\n", 
+                              benchmark, baseValue, prValue, percentChange)
+
+                    // Check if there's a regression of more than 5%
+                    if percentChange > 5.0 {
+                        fmt.Printf("⚠️ PERFORMANCE REGRESSION: %s is %.2f%% slower!\n", 
+                                  benchmark, percentChange)
+                        hasRegression = true
+                    }
+                }
+            }
+
+            // Exit with a non-zero status code if there's a regression
+            if hasRegression {
+                os.Exit(1)
+            }
+        }
+
+        // parseResults parses benchmark results from a file and returns a map of benchmark names to ns/op values
+        // For benchmarks with multiple runs, it uses the last value (which is what we want since Go runs benchmarks multiple times)
+        func parseResults(file *os.File) map[string]float64 {
+            results := make(map[string]float64)
+            scanner := bufio.NewScanner(file)
+
+            // Regular expression to extract benchmark name and ns/op value
+            // Format: BenchmarkName-8         1234567       123.4 ns/op
+            nsOpRegex := regexp.MustCompile(`([^\s]+)\s+\d+\s+([\d\.]+) ns/op`)
+
+            for scanner.Scan() {
+                line := scanner.Text()
+                matches := nsOpRegex.FindStringSubmatch(line)
+                if len(matches) == 3 {
+                    benchmark := matches[1]
+                    nsOp, err := strconv.ParseFloat(matches[2], 64)
+                    if err == nil {
+                        // For benchmarks with multiple runs, we'll use the last one
+                        results[benchmark] = nsOp
+                    }
+                }
+            }
+
+            return results
+        }
+        EOF
+
+        # Run the analysis script
+        go run /tmp/analyze_benchmarks.go
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results
+        path: |
+          /tmp/benchmark/base_results.txt
+          /tmp/benchmark/pr_results.txt
+          /tmp/benchmark/comparison.md

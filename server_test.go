@@ -216,32 +216,64 @@ func TestDefaultErrorHandler(t *testing.T) {
 	assert.Equal(t, "bad request", w.Body.String(), "Expected body to match HttpError message")
 }
 
-// TestDummyResponseWriter tests the dummyResponseWriter implementation
-func TestDummyResponseWriter(t *testing.T) {
-	// Create a new dummyResponseWriter
-	d := &dummyResponseWriter{
-		header: make(http.Header),
-	}
+// TestResponseRecorder tests the responseRecorder implementation
+func TestResponseRecorder(t *testing.T) {
+	// Create a new responseRecorder
+	r := getResponseRecorder()
+	defer releaseResponseRecorder(r)
 
 	// Test Header method
-	header := d.Header()
-	assert.NotNil(t, header, "dummyResponseWriter.Header() returned nil")
+	header := r.Header()
+	assert.NotNil(t, header, "responseRecorder.Header() returned nil")
 
 	// Test setting a header value
 	header.Set("Content-Type", "application/json")
 	assert.Equal(t, "application/json", header.Get("Content-Type"), "Header value not set correctly")
 
 	// Test Write method
-	n, err := d.Write([]byte("test"))
-	assert.NoError(t, err, "dummyResponseWriter.Write() returned error")
-	assert.Equal(t, 4, n, "dummyResponseWriter.Write() returned incorrect byte count")
+	n, err := r.Write([]byte("test"))
+	assert.NoError(t, err, "responseRecorder.Write() returned error")
+	assert.Equal(t, 4, n, "responseRecorder.Write() returned incorrect byte count")
 
-	// Test WriteHeader method (should be a no-op)
-	d.WriteHeader(StatusOK)
+	// Test WriteHeader method
+	r.WriteHeader(StatusOK)
+	assert.Equal(t, StatusOK, r.code, "Status code not set correctly")
 
 	// Test Flush method (should be a no-op)
-	d.Flush()
+	r.Flush()
 }
+
+// The following code was moved from bench_writer_test.go
+
+// BenchResponseWriter is a response writer optimized for benchmarking
+type BenchResponseWriter = responseRecorder
+
+// GetBenchWriter returns a response writer optimized for benchmarking
+func GetBenchWriter() *BenchResponseWriter {
+	return getResponseRecorder()
+}
+
+// ReleaseBenchWriter returns a benchmark response writer to the pool
+func ReleaseBenchWriter(w *BenchResponseWriter) {
+	releaseResponseRecorder(w)
+}
+
+// TestResponseWriter is a response writer optimized for testing
+type TestResponseWriter = responseRecorder
+
+// GetTestWriter returns a response writer optimized for testing
+func GetTestWriter() *TestResponseWriter {
+	return getResponseRecorder()
+}
+
+// ReleaseTestWriter returns a test response writer to the pool
+func ReleaseTestWriter(w *TestResponseWriter) {
+	releaseResponseRecorder(w)
+}
+
+// For backward compatibility with existing tests
+var getBenchWriter = GetBenchWriter
+var getTestWriter = GetTestWriter
 
 // TestNoopLogger tests the noopLogger implementation
 func TestNoopLogger(t *testing.T) {

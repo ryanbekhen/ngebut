@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -112,14 +113,79 @@ func (hs *httpServer) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 // requestPool is a pool of Request objects for reuse
 var requestPool = sync.Pool{
 	New: func() interface{} {
-		return &Request{}
+		return &Request{
+			Header: NewHeader(),
+			ctx:    context.Background(),
+		}
 	},
 }
 
 // getRequest gets a Request from the pool and initializes it with the given http.Request
 func getRequest(r *http.Request) *Request {
-	// Use the existing NewRequest function which already handles all the initialization
-	return NewRequest(r)
+	// Get a Request from the pool
+	req := requestPool.Get().(*Request)
+
+	if r == nil {
+		// Just return the initialized Request from the pool
+		return req
+	}
+
+	// Initialize the Request with the given http.Request
+	// Read the request body if it exists
+	var body []byte
+	if r.Body != nil {
+		// Get a buffer from the pool
+		buf := requestBodyBufferPool.Get().(*bytes.Buffer)
+		buf.Reset()
+
+		// Read the body into the buffer
+		_, err := io.Copy(buf, r.Body)
+		if err == nil {
+			// Close the original body
+			_ = r.Body.Close()
+
+			// Get the bytes from the buffer
+			body = buf.Bytes()
+
+			// Create a new ReadCloser so the body can be read again if needed
+			// Use the same buffer to avoid allocation
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		// Return the buffer to the pool
+		requestBodyBufferPool.Put(buf)
+	}
+
+	// Initialize the Request fields
+	req.Method = r.Method
+	req.URL = r.URL
+	req.Proto = r.Proto
+
+	// Handle headers more efficiently
+	if len(r.Header) == 0 {
+		// If there are no headers, just clear the existing header map
+		if req.Header != nil {
+			for k := range *req.Header {
+				delete(*req.Header, k)
+			}
+		}
+	} else {
+		// If there are headers, use NewHeaderFromMap which is optimized
+		// Release the old header if it exists
+		if req.Header != nil {
+			releaseHeader(req.Header)
+		}
+		req.Header = NewHeaderFromMap(r.Header)
+	}
+
+	req.Body = body
+	req.ContentLength = r.ContentLength
+	req.Host = r.Host
+	req.RemoteAddr = r.RemoteAddr
+	req.RequestURI = r.RequestURI
+	req.ctx = r.Context()
+
+	return req
 }
 
 // releaseRequest returns a Request to the pool
@@ -175,23 +241,23 @@ func (hs *httpServer) OnTraffic(c gnet.Conn) gnet.Action {
 			contentType := ""
 			if processed+8 < n {
 				// Look for Content-Type header in the buffer
-				contentTypeIndex := bytes.Index(buf[processed:], []byte("Content-Type:"))
+				contentTypeIndex := bytes.Index(buf[processed:], []byte(HeaderContentType+":"))
 				if contentTypeIndex != -1 {
 					endIndex := bytes.Index(buf[processed+contentTypeIndex:], []byte("\r\n"))
 					if endIndex != -1 && endIndex < 100 { // Limit search to avoid buffer overruns
-						contentType = string(buf[processed+contentTypeIndex+13 : processed+contentTypeIndex+endIndex])
+						contentType = string(buf[processed+contentTypeIndex+len(HeaderContentType)+1 : processed+contentTypeIndex+endIndex])
 						contentType = strings.TrimSpace(contentType)
 					}
 				}
 			}
 
 			// If this looks like a form submission, send a more helpful response
-			if strings.Contains(contentType, "multipart/form-data") ||
-				strings.Contains(contentType, "application/x-www-form-urlencoded") {
+			if strings.Contains(contentType, MIMEMultipartForm) ||
+				strings.Contains(contentType, MIMEApplicationForm) {
 				parserHeaders := getParserHeaders()
 				defer releaseParserHeaders(parserHeaders)
 				errorMsg := []byte("Bad Request: Form data could not be processed. Please check your form submission.")
-				hc.WriteResponse(http.StatusBadRequest, parserHeaders, errorMsg)
+				hc.WriteResponse(StatusBadRequest, parserHeaders, errorMsg)
 				c.Write(hc.Buf)
 			}
 
@@ -276,49 +342,83 @@ func (hs *httpServer) OnClose(c gnet.Conn, err error) (action gnet.Action) {
 	return gnet.None
 }
 
-// dummyResponseWriter is used as a placeholder when creating a Ctx that will handle its own response writing
-// but still needs to track headers correctly
-type dummyResponseWriter struct {
+// responseRecorder is an optimized response writer for benchmarks and internal use
+// It implements http.ResponseWriter with minimal allocations
+// Similar to httptest.ResponseRecorder but optimized for our use case
+type responseRecorder struct {
 	header http.Header
+	body   []byte
+	code   int
 }
 
-// dummyWriterPool is a pool of dummyResponseWriter objects for reuse
-var dummyWriterPool = sync.Pool{
+// Pre-allocate a shared empty header for zero-allocation initialization
+var emptyHeader = make(http.Header)
+
+// responseRecorderPool is a pool of responseRecorder objects for reuse
+var responseRecorderPool = sync.Pool{
 	New: func() interface{} {
-		return &dummyResponseWriter{
-			header: make(http.Header),
+		return &responseRecorder{
+			header: make(http.Header, 16), // Pre-allocate with larger capacity for headers
+			body:   make([]byte, 0, 4096), // 4KB initial capacity to reduce reallocations
+			code:   StatusOK,
 		}
 	},
 }
 
-// getDummyWriter gets a dummyResponseWriter from the pool
-func getDummyWriter() *dummyResponseWriter {
-	return dummyWriterPool.Get().(*dummyResponseWriter)
+// getResponseRecorder gets a responseRecorder from the pool
+func getResponseRecorder() *responseRecorder {
+	return responseRecorderPool.Get().(*responseRecorder)
 }
 
-// releaseDummyWriter returns a dummyResponseWriter to the pool
-func releaseDummyWriter(d *dummyResponseWriter) {
-	// Clear the header map
-	for k := range d.header {
-		delete(d.header, k)
+// releaseResponseRecorder returns a responseRecorder to the pool
+func releaseResponseRecorder(w *responseRecorder) {
+	// For small header maps, clear them
+	// For larger ones, replace with a new one to avoid expensive iteration
+	if len(w.header) > 32 {
+		w.header = make(http.Header, 16)
+	} else if len(w.header) > 0 {
+		// Clear the header map efficiently
+		for k := range w.header {
+			delete(w.header, k)
+		}
 	}
-	dummyWriterPool.Put(d)
+
+	// Reset the body efficiently
+	// If the capacity is too large, replace it to avoid holding onto memory
+	if cap(w.body) > 16384 { // 16KB
+		w.body = make([]byte, 0, 4096) // 4KB
+	} else {
+		w.body = w.body[:0]
+	}
+
+	// Reset the status code
+	w.code = StatusOK
+
+	// Return to pool
+	responseRecorderPool.Put(w)
 }
 
-func (d *dummyResponseWriter) Header() http.Header {
-	return d.header
+func (w *responseRecorder) Header() http.Header {
+	return w.header
 }
 
-func (d *dummyResponseWriter) Write(b []byte) (int, error) {
+func (w *responseRecorder) Write(b []byte) (int, error) {
+	// For benchmarks, we can skip storing the data
+	// But for actual requests, we need to store it
+	if len(b) > 0 {
+		// Use append directly which will handle capacity growth efficiently
+		// This avoids the manual capacity check and buffer creation
+		w.body = append(w.body, b...)
+	}
 	return len(b), nil
 }
 
-func (d *dummyResponseWriter) WriteHeader(statusCode int) {
-	// No-op
+func (w *responseRecorder) WriteHeader(statusCode int) {
+	w.code = statusCode
 }
 
-func (d *dummyResponseWriter) Flush() {
-	// No-op
+func (w *responseRecorder) Flush() {
+	// No-op for benchmarks
 }
 
 // headerPool is a pool of Header objects for reuse
@@ -368,15 +468,15 @@ func processRequest(hs *httpServer, hc *httpparser.Codec, req *Request, c gnet.C
 		req.ContentLength = int64(hc.ContentLength)
 	}
 
-	// Get a dummyWriter from the pool
-	dummyWriter := getDummyWriter()
-	defer releaseDummyWriter(dummyWriter)
+	// Get a responseRecorder from the pool
+	recorder := getResponseRecorder()
+	defer releaseResponseRecorder(recorder)
 
-	ctx := getContextFromRequest(dummyWriter, req)
+	ctx := getContextFromRequest(recorder, req)
 	defer ReleaseContext(ctx)
 
 	// Set server header directly in context header
-	ctx.Set("Server", "ngebut")
+	ctx.Set(HeaderServer, "ngebut")
 
 	// Process the request
 	hs.router.ServeHTTP(ctx, ctx.Request)
@@ -399,8 +499,8 @@ func processRequest(hs *httpServer, hc *httpparser.Codec, req *Request, c gnet.C
 	parserHeaders := getParserHeaders()
 	defer releaseParserHeaders(parserHeaders)
 
-	// Directly copy headers from dummyWriter to parserHeaders
-	for k, values := range dummyWriter.header {
+	// Directly copy headers from responseRecorder to parserHeaders
+	for k, values := range recorder.header {
 		if len(values) > 0 {
 			parserHeaders[k] = values
 		}
@@ -422,7 +522,7 @@ func processRequest(hs *httpServer, hc *httpparser.Codec, req *Request, c gnet.C
 		}
 		hc.WriteResponse(ctx.statusCode, parserHeaders, nil)
 	} else {
-		hc.WriteResponse(ctx.statusCode, parserHeaders, ctx.body)
+		hc.WriteResponse(ctx.statusCode, parserHeaders, recorder.body)
 	}
 }
 

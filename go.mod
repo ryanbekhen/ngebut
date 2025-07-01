@@ -1,8 +1,6 @@
 module github.com/ryanbekhen/ngebut
 
-go 1.24.0
-
-toolchain go1.24.3
+go 1.24.3
 
 require (
 	github.com/evanphx/wildcat v0.0.0-20141114174135-e7012f664567
@@ -19,7 +17,7 @@ require (
 	github.com/vektra/errors v0.0.0-20140903201135-c64d83aba85a // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/sync v0.14.0 // indirect
+	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

@@ -72,6 +72,19 @@ type Static struct {
 	// Optional. Default value 0.
 	MaxAge int `json:"max_age"`
 
+	// When set to true, enables in-memory caching of file contents.
+	// This can significantly improve performance for frequently accessed files.
+	// Optional. Default value false.
+	InMemoryCache bool `json:"in_memory_cache"`
+
+	// Maximum size of the in-memory cache in bytes.
+	// Optional. Default value 100MB.
+	MaxCacheSize int64 `json:"max_cache_size"`
+
+	// Maximum number of files to store in the in-memory cache.
+	// Optional. Default value 1000.
+	MaxCacheItems int `json:"max_cache_items"`
+
 	// ModifyResponse defines a function that allows you to alter the response.
 	//
 	// Optional. Default: nil
@@ -92,5 +105,8 @@ var DefaultStaticConfig = Static{
 	Index:          "index.html",
 	CacheDuration:  10 * time.Second,
 	MaxAge:         0,
+	InMemoryCache:  true,              // Enable in-memory caching by default for better performance
+	MaxCacheSize:   100 * 1024 * 1024, // 100MB
+	MaxCacheItems:  1000,              // 1000 files
 	ModifyResponse: nil,
 }

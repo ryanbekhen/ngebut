@@ -133,7 +133,7 @@ func (a *StorageAdapter) Get(id string) (*Session, error) {
 	data, err := a.storage.Get(a.ctx, id)
 	if err != nil {
 		// If the key doesn't exist, return nil without an error
-		if errors.Is(err, ngebut.ErrNotFound) {
+		if errors.Is(err, ngebut.ErrNotFound) || err.Error() == "key not found" {
 			return nil, nil
 		}
 		return nil, err
@@ -509,7 +509,7 @@ func (m *Manager) GetOrCreate(c *ngebut.Ctx) (*Session, error) {
 				cookieName = m.config.CookieName // Fallback to CookieName for backward compatibility
 			}
 
-			c.Set("Set-Cookie", cookieName+"="+session.ID+
+			c.Set(ngebut.HeaderSetCookie, cookieName+"="+session.ID+
 				"; Path="+m.config.Path+
 				"; Max-Age="+strconv.Itoa(maxAge)+
 				httpOnlyStr+

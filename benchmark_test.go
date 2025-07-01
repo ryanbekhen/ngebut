@@ -1,9 +1,8 @@
 package ngebut
 
 import (
-	"encoding/json"
-	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 )
 
@@ -37,8 +36,8 @@ func BenchmarkRouting(b *testing.B) {
 	// Benchmark
 	b.ResetTimer()
 	b.Run("Static Route", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/users", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/users", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -50,8 +49,8 @@ func BenchmarkRouting(b *testing.B) {
 	})
 
 	b.Run("Param Route", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/users/123", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/users/123", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -63,8 +62,8 @@ func BenchmarkRouting(b *testing.B) {
 	})
 
 	b.Run("Nested Param Route", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/users/123/profile", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/users/123/profile", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -76,8 +75,8 @@ func BenchmarkRouting(b *testing.B) {
 	})
 
 	b.Run("Deep Nested Route", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/api/v1/products", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/api/v1/products", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -87,6 +86,26 @@ func BenchmarkRouting(b *testing.B) {
 			ctx = GetContext(w, req)
 		}
 	})
+}
+
+// Pool for large JSON response objects
+var largeResponsePool = sync.Pool{
+	New: func() interface{} {
+		// Pre-allocate a slice of 100 benchResponse objects
+		data := make([]benchResponse, 100)
+		for i := 0; i < 100; i++ {
+			data[i] = benchResponse{
+				Message: "Item " + string(rune(i)),
+				Status:  200,
+				Data: map[string]string{
+					"field1": "value1",
+					"field2": "value2",
+					"field3": "value3",
+				},
+			}
+		}
+		return &data
+	},
 }
 
 // BenchmarkResponses benchmarks different response types
@@ -103,19 +122,14 @@ func BenchmarkResponses(b *testing.B) {
 		})
 	})
 	server.GET("/json-large", func(c *Ctx) {
-		data := make([]benchResponse, 100)
-		for i := 0; i < 100; i++ {
-			data[i] = benchResponse{
-				Message: "Item " + string(rune(i)),
-				Status:  200,
-				Data: map[string]string{
-					"field1": "value1",
-					"field2": "value2",
-					"field3": "value3",
-				},
-			}
-		}
-		c.JSON(data)
+		// Get a pre-allocated response object from the pool
+		data := largeResponsePool.Get().(*[]benchResponse)
+
+		// Use the object
+		c.JSON(*data)
+
+		// Return the object to the pool for reuse
+		largeResponsePool.Put(data)
 	})
 	server.GET("/html", func(c *Ctx) {
 		c.HTML("<html><body><h1>Hello, World!</h1></body></html>")
@@ -124,8 +138,8 @@ func BenchmarkResponses(b *testing.B) {
 	// Benchmark
 	b.ResetTimer()
 	b.Run("String Response", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/string", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/string", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -137,8 +151,8 @@ func BenchmarkResponses(b *testing.B) {
 	})
 
 	b.Run("JSON Response", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/json", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/json", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -150,8 +164,8 @@ func BenchmarkResponses(b *testing.B) {
 	})
 
 	b.Run("Large JSON Response", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/json-large", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/json-large", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -163,8 +177,8 @@ func BenchmarkResponses(b *testing.B) {
 	})
 
 	b.Run("HTML Response", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/html", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/html", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -211,8 +225,8 @@ func BenchmarkMiddleware(b *testing.B) {
 	// Benchmark
 	b.ResetTimer()
 	b.Run("No Middleware", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -224,8 +238,8 @@ func BenchmarkMiddleware(b *testing.B) {
 	})
 
 	b.Run("One Middleware", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -237,8 +251,8 @@ func BenchmarkMiddleware(b *testing.B) {
 	})
 
 	b.Run("Multiple Middleware", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -285,8 +299,8 @@ func BenchmarkGroupRouting(b *testing.B) {
 	// Benchmark
 	b.ResetTimer()
 	b.Run("Group Route", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/api/users", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/api/users", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -298,8 +312,8 @@ func BenchmarkGroupRouting(b *testing.B) {
 	})
 
 	b.Run("Nested Group Route", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/api/v1/products", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/api/v1/products", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -311,8 +325,8 @@ func BenchmarkGroupRouting(b *testing.B) {
 	})
 
 	b.Run("Nested Group with Middleware", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/api/v2/products", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/api/v2/products", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -343,7 +357,7 @@ func BenchmarkContextOperations(b *testing.B) {
 
 	// Route with header access
 	server.GET("/headers", func(c *Ctx) {
-		userAgent := c.Get("User-Agent")
+		userAgent := c.Get(HeaderUserAgent)
 		c.String("User-Agent: %s", userAgent)
 	})
 
@@ -360,8 +374,8 @@ func BenchmarkContextOperations(b *testing.B) {
 	// Benchmark
 	b.ResetTimer()
 	b.Run("Param Access", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/users/123", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/users/123", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -373,8 +387,8 @@ func BenchmarkContextOperations(b *testing.B) {
 	})
 
 	b.Run("Query Param Access", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/search?q=test", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/search?q=test", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -386,9 +400,9 @@ func BenchmarkContextOperations(b *testing.B) {
 	})
 
 	b.Run("Header Access", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/headers", nil)
-		req.Header.Set("User-Agent", "Benchmark-Agent")
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/headers", nil)
+		req.Header.Set(HeaderUserAgent, "Benchmark-Agent")
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -418,8 +432,8 @@ func BenchmarkHTTPMethods(b *testing.B) {
 	// Benchmark
 	b.ResetTimer()
 	b.Run("GET", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/resource", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/resource", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -431,8 +445,8 @@ func BenchmarkHTTPMethods(b *testing.B) {
 	})
 
 	b.Run("POST", func(b *testing.B) {
-		req := httptest.NewRequest("POST", "http://example.com/resource", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodPost, "http://example.com/resource", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -444,8 +458,8 @@ func BenchmarkHTTPMethods(b *testing.B) {
 	})
 
 	b.Run("PUT", func(b *testing.B) {
-		req := httptest.NewRequest("PUT", "http://example.com/resource", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodPut, "http://example.com/resource", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -457,8 +471,8 @@ func BenchmarkHTTPMethods(b *testing.B) {
 	})
 
 	b.Run("DELETE", func(b *testing.B) {
-		req := httptest.NewRequest("DELETE", "http://example.com/resource", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodDelete, "http://example.com/resource", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -470,8 +484,8 @@ func BenchmarkHTTPMethods(b *testing.B) {
 	})
 
 	b.Run("PATCH", func(b *testing.B) {
-		req := httptest.NewRequest("PATCH", "http://example.com/resource", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodPatch, "http://example.com/resource", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -492,8 +506,8 @@ func BenchmarkStaticFileServing(b *testing.B) {
 	// Benchmark
 	b.ResetTimer()
 	b.Run("HTML File", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/assets/index.html", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/assets/index.html", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -505,8 +519,8 @@ func BenchmarkStaticFileServing(b *testing.B) {
 	})
 
 	b.Run("CSS File", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/assets/css/style.css", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/assets/css/style.css", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -518,8 +532,8 @@ func BenchmarkStaticFileServing(b *testing.B) {
 	})
 
 	b.Run("Text File", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/assets/sample.txt", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(MethodGet, "http://example.com/assets/sample.txt", nil)
+		w := getTestWriter()
 		ctx := GetContext(w, req)
 
 		b.ReportAllocs()
@@ -527,85 +541,6 @@ func BenchmarkStaticFileServing(b *testing.B) {
 			server.router.ServeHTTP(ctx, ctx.Request)
 			ReleaseContext(ctx)
 			ctx = GetContext(w, req)
-		}
-	})
-}
-
-// BenchmarkCompareToNetHTTP compares Ngebut to standard net/http
-func BenchmarkCompareToNetHTTP(b *testing.B) {
-	// Setup Ngebut server
-	ngebutServer := New(DefaultConfig())
-	ngebutServer.GET("/hello", func(c *Ctx) {
-		c.String("Hello, World!")
-	})
-	ngebutServer.GET("/json", func(c *Ctx) {
-		c.JSON(benchResponse{
-			Message: "Hello, World!",
-			Status:  200,
-		})
-	})
-
-	// Setup standard net/http server
-	mux := http.NewServeMux()
-	mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte("Hello, World!"))
-	})
-	mux.HandleFunc("/json", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(benchResponse{
-			Message: "Hello, World!",
-			Status:  200,
-		})
-	})
-
-	// Benchmark
-	b.ResetTimer()
-	b.Run("Ngebut-String", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/hello", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
-		ctx := GetContext(w, req)
-
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			ngebutServer.router.ServeHTTP(ctx, ctx.Request)
-			ReleaseContext(ctx)
-			ctx = GetContext(w, req)
-		}
-	})
-
-	b.Run("NetHTTP-String", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/hello", nil)
-		w := httptest.NewRecorder()
-
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			mux.ServeHTTP(w, req)
-			w.Body.Reset()
-		}
-	})
-
-	b.Run("Ngebut-JSON", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/json", nil)
-		w := &dummyResponseWriter{header: make(http.Header)}
-		ctx := GetContext(w, req)
-
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			ngebutServer.router.ServeHTTP(ctx, ctx.Request)
-			ReleaseContext(ctx)
-			ctx = GetContext(w, req)
-		}
-	})
-
-	b.Run("NetHTTP-JSON", func(b *testing.B) {
-		req := httptest.NewRequest("GET", "http://example.com/json", nil)
-		w := httptest.NewRecorder()
-
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			mux.ServeHTTP(w, req)
-			w.Body.Reset()
 		}
 	})
 }

@@ -48,9 +48,5 @@ The internal benchmarks cover:
     - CSS files
     - Text files
 
-8. **Comparison with net/http**
-    - String response comparison
-    - JSON response comparison
-
 *Note: Benchmark results may vary based on hardware and environment. Ngebut is still under active development and
 performance optimizations are ongoing.*

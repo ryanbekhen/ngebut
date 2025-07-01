@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/evanphx/wildcat"
+	internalunsafe "github.com/ryanbekhen/ngebut/internal/unsafe"
 )
 
 // Constants for HTTP parsing
@@ -33,7 +33,7 @@ var (
 	// readerPool reuses bufio.Reader objects
 	readerPool = sync.Pool{
 		New: func() interface{} {
-			return bufio.NewReaderSize(nil, 4096)
+			return bufio.NewReaderSize(nil, 8192) // Increased to 8KB for better performance
 		},
 	}
 
@@ -128,7 +128,7 @@ func ReleaseBytesReader(r *bytes.Reader) {
 // unsafeByteToString converts a byte slice to a string without allocation
 // This is safe only if the byte slice is not modified after the conversion
 func unsafeByteToString(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
+	return internalunsafe.B2S(b)
 }
 
 // Header represents HTTP headers.
@@ -536,8 +536,8 @@ func (hc *Codec) Reset() {
 // ResponseBufferPool is a pool of byte slices for response buffers.
 var ResponseBufferPool = sync.Pool{
 	New: func() interface{} {
-		// Start with a reasonable size buffer
-		return make([]byte, 0, 4096)
+		// Start with a larger buffer to reduce reallocations
+		return make([]byte, 0, 16384) // Increased to 16KB for better performance
 	},
 }
 
@@ -624,16 +624,18 @@ func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
 	var buf []byte
 	if cap(hc.Buf) < estimatedSize {
 		// Return current buffer to pool if it exists and is worth pooling
-		if cap(hc.Buf) > 0 && cap(hc.Buf) <= 32*1024 { // Don't pool buffers larger than 32KB
+		if cap(hc.Buf) > 0 && cap(hc.Buf) <= 64*1024 { // Increased threshold to 64KB
 			ResponseBufferPool.Put(hc.Buf[:0])
 		}
 
 		// Get a buffer from the pool
 		poolBuf := ResponseBufferPool.Get().([]byte)
 		if cap(poolBuf) < estimatedSize {
-			// If the pool buffer is too small, create a new one with exact capacity
+			// If the pool buffer is too small, create a new one with more capacity
+			// Add extra capacity to reduce future reallocations
+			newCap := estimatedSize + (estimatedSize / 4) // Add 25% extra capacity
 			ResponseBufferPool.Put(poolBuf[:0])
-			buf = make([]byte, 0, estimatedSize)
+			buf = make([]byte, 0, newCap)
 		} else {
 			buf = poolBuf[:0]
 		}
@@ -677,16 +679,48 @@ func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
 	}
 
 	// Add custom headers - optimize for common cases
-	if len(header) <= 4 { // Small number of headers is common
+	if len(header) <= 8 { // Increased threshold for small maps
 		// Direct iteration for small maps is faster than range
 		for k, values := range header {
 			if len(values) == 1 { // Most common case: single value per header
+				// Pre-calculate the total size needed for this header
+				headerSize := len(k) + len(colonSpace) + len(values[0]) + len(crlfBytes)
+
+				// Ensure we have enough capacity to avoid reallocation
+				if cap(buf)-len(buf) < headerSize {
+					// Grow the buffer with extra capacity
+					newCap := cap(buf) * 2
+					if newCap < len(buf)+headerSize {
+						newCap = len(buf) + headerSize + 256 // Add extra space
+					}
+					newBuf := make([]byte, len(buf), newCap)
+					copy(newBuf, buf)
+					buf = newBuf
+				}
+
+				// Append all at once
 				buf = append(buf, k...)
 				buf = append(buf, colonSpace...)
 				buf = append(buf, values[0]...)
 				buf = append(buf, crlfBytes...)
 			} else {
 				for _, v := range values {
+					// Pre-calculate the total size needed for this header
+					headerSize := len(k) + len(colonSpace) + len(v) + len(crlfBytes)
+
+					// Ensure we have enough capacity to avoid reallocation
+					if cap(buf)-len(buf) < headerSize {
+						// Grow the buffer with extra capacity
+						newCap := cap(buf) * 2
+						if newCap < len(buf)+headerSize {
+							newCap = len(buf) + headerSize + 256 // Add extra space
+						}
+						newBuf := make([]byte, len(buf), newCap)
+						copy(newBuf, buf)
+						buf = newBuf
+					}
+
+					// Append all at once
 					buf = append(buf, k...)
 					buf = append(buf, colonSpace...)
 					buf = append(buf, v...)
@@ -696,6 +730,16 @@ func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
 		}
 	} else {
 		// Standard path for many headers
+		// Pre-allocate space for headers to avoid reallocations
+		headerSpace := len(header) * 64 // Estimate 64 bytes per header on average
+		if cap(buf)-len(buf) < headerSpace {
+			// Grow the buffer with extra capacity
+			newCap := len(buf) + headerSpace + 256 // Add extra space
+			newBuf := make([]byte, len(buf), newCap)
+			copy(newBuf, buf)
+			buf = newBuf
+		}
+
 		for k, values := range header {
 			for _, v := range values {
 				buf = append(buf, k...)
