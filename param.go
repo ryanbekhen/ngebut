@@ -13,6 +13,68 @@ type paramContextKey struct{}
 // predefined instance of paramContextKey to avoid creating a new one for each lookup
 var paramCtxKey = paramContextKey{}
 
+// Params is a fixed-size struct for URL parameters to avoid allocations
+type Params struct {
+	keys   [4]string
+	values [4]string
+	len    int
+}
+
+// Get retrieves a parameter value by key
+// Returns the value and a boolean indicating if the key was found
+func (p *Params) Get(key string) (string, bool) {
+	// Linear search for parameters
+	for i := 0; i < p.len; i++ {
+		if p.keys[i] == key {
+			return p.values[i], true
+		}
+	}
+	return "", false
+}
+
+// Set sets a parameter value by key
+// If the key already exists, its value is updated
+// If the key doesn't exist, a new entry is added
+func (p *Params) Set(key, value string) {
+	// First check if the key already exists
+	for i := 0; i < p.len; i++ {
+		if p.keys[i] == key {
+			p.values[i] = value
+			return
+		}
+	}
+
+	// Key doesn't exist, add a new entry if there's space
+	if p.len < len(p.keys) {
+		p.keys[p.len] = key
+		p.values[p.len] = value
+		p.len++
+	}
+}
+
+// Reset clears all parameters
+func (p *Params) Reset() {
+	p.len = 0
+}
+
+// paramsPool is a pool of Params structs for reuse
+var paramsPool = sync.Pool{
+	New: func() interface{} {
+		return &Params{}
+	},
+}
+
+// getParams gets a Params struct from the pool
+func getParams() *Params {
+	return paramsPool.Get().(*Params)
+}
+
+// releaseParams returns a Params struct to the pool
+func releaseParams(p *Params) {
+	p.Reset()
+	paramsPool.Put(p)
+}
+
 // paramMap is a reusable map for URL parameters
 var paramMapPool = sync.Pool{
 	New: func() interface{} {
@@ -97,7 +159,7 @@ var paramSlicePool = sync.Pool{
 		// Most routes have fewer than 8 parameters, so this is a good balance
 		// Pre-allocate the entries slice with capacity for common routes
 		return &paramSlice{
-			entries: make([]paramEntry, 0, 16), // Increased capacity to reduce reallocations
+			entries: make([]paramEntry, 0, 32), // Increased capacity to further reduce reallocations
 		}
 	},
 }
@@ -112,4 +174,67 @@ func releaseParamSlice(ps *paramSlice) {
 	// Clear the slice
 	ps.entries = ps.entries[:0]
 	paramSlicePool.Put(ps)
+}
+
+// routeParams is a more efficient structure for storing route parameters
+// It uses separate slices for keys and values instead of a map or slice of structs
+type routeParams struct {
+	keys   []string
+	values []string
+}
+
+// Get retrieves a parameter value by key
+// Returns the value and a boolean indicating if the key was found
+func (rp *routeParams) Get(key string) (string, bool) {
+	// Linear search for parameters
+	for i, k := range rp.keys {
+		if k == key {
+			return rp.values[i], true
+		}
+	}
+	return "", false
+}
+
+// Set sets a parameter value by key
+// If the key already exists, its value is updated
+// If the key doesn't exist, a new entry is added
+func (rp *routeParams) Set(key, value string) {
+	// First check if the key already exists
+	for i, k := range rp.keys {
+		if k == key {
+			rp.values[i] = value
+			return
+		}
+	}
+
+	// Key doesn't exist, add a new entry
+	rp.keys = append(rp.keys, key)
+	rp.values = append(rp.values, value)
+}
+
+// Reset clears all parameters
+func (rp *routeParams) Reset() {
+	rp.keys = rp.keys[:0]
+	rp.values = rp.values[:0]
+}
+
+// routeParamsPool is a pool of routeParams structs for reuse
+var routeParamsPool = sync.Pool{
+	New: func() interface{} {
+		return &routeParams{
+			keys:   make([]string, 0, 4), // Pre-allocate with capacity for common routes
+			values: make([]string, 0, 4), // Pre-allocate with capacity for common routes
+		}
+	},
+}
+
+// getRouteParams gets a routeParams struct from the pool
+func getRouteParams() *routeParams {
+	return routeParamsPool.Get().(*routeParams)
+}
+
+// releaseRouteParams returns a routeParams struct to the pool
+func releaseRouteParams(rp *routeParams) {
+	rp.Reset()
+	routeParamsPool.Put(rp)
 }

@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/evanphx/wildcat"
+	internalunsafe "github.com/ryanbekhen/ngebut/internal/unsafe"
 )
 
 // Constants for HTTP parsing
@@ -30,12 +30,12 @@ var (
 		},
 	}
 
- // readerPool reuses bufio.Reader objects
- readerPool = sync.Pool{
- 	New: func() interface{} {
- 		return bufio.NewReaderSize(nil, 8192) // Increased to 8KB for better performance
- 	},
- }
+	// readerPool reuses bufio.Reader objects
+	readerPool = sync.Pool{
+		New: func() interface{} {
+			return bufio.NewReaderSize(nil, 8192) // Increased to 8KB for better performance
+		},
+	}
 
 	// bytesReaderPool reuses bytes.Reader objects
 	bytesReaderPool = sync.Pool{
@@ -128,7 +128,7 @@ func ReleaseBytesReader(r *bytes.Reader) {
 // unsafeByteToString converts a byte slice to a string without allocation
 // This is safe only if the byte slice is not modified after the conversion
 func unsafeByteToString(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
+	return internalunsafe.B2S(b)
 }
 
 // Header represents HTTP headers.

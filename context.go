@@ -29,7 +29,9 @@ type Ctx struct {
 	queryCache cachedQueryMap
 
 	// Fields for the middleware pattern
-	middlewareStack []MiddlewareFunc
+	middlewareStack []MiddlewareFunc   // Dynamic middleware stack (legacy)
+	fixedMiddleware [16]MiddlewareFunc // Fixed-size buffer for middleware functions (new optimized approach)
+	fixedCount      int                // Number of middleware functions in the fixed buffer
 	middlewareIndex int
 	handler         Handler
 }
@@ -44,8 +46,9 @@ var contextPool = sync.Pool{
 			statusCode:      StatusOK,
 			err:             nil,
 			middlewareStack: make([]MiddlewareFunc, 0, 4), // Pre-allocate capacity for common middleware count
+			fixedCount:      0,                            // No middleware in fixed buffer initially
 			middlewareIndex: -1,
-			paramCache:      cachedParamMap{valid: false, params: nil},
+			paramCache:      cachedParamMap{valid: false, params: nil, routeParams: nil, fixedParams: nil},
 			queryCache:      cachedQueryMap{valid: false, values: nil},
 			userData:        make(map[string]interface{}, 4), // Pre-allocate userData map with increased capacity
 		}
@@ -66,6 +69,28 @@ var jsonBufferPool = sync.Pool{
 		return bytes.NewBuffer(make([]byte, 0, 32768)) // 32KB capacity for large JSON responses
 	},
 }
+
+// jsonEncoderPool is a pool of JSON encoders to avoid creating new ones
+// This is not used directly as encoders can't be reset with a new writer
+// Instead, we use the bufPool below and create a new encoder for each use
+var jsonEncoderPool = sync.Pool{
+	New: func() interface{} {
+		// Create a buffer with a small initial capacity
+		// The actual buffer will be replaced when the encoder is used
+		buf := bytes.NewBuffer(make([]byte, 0, 512))
+		return json.NewEncoder(buf)
+	},
+}
+
+// bufPool is a pool of bytes.Buffer objects for reuse in JSON encoding
+var bufPool = sync.Pool{
+	New: func() any {
+		return new(bytes.Buffer)
+	},
+}
+
+// Pre-allocated error message for JSON encoding errors
+var jsonEncodingErr = errors.New("JSON encoding error")
 
 // copyHeadersToWriter copies all headers from c.header to c.Writer.Header()
 // and ensures headers set after c.Next() in middleware are included
@@ -199,6 +224,22 @@ func (c *Ctx) GetError() error {
 func (c *Ctx) Next() {
 	c.middlewareIndex++
 
+	// Fast path: use fixed-size buffer if available
+	if c.fixedCount > 0 {
+		// If we've gone through all middleware in the fixed buffer, call the final handler
+		if c.middlewareIndex >= c.fixedCount {
+			if c.handler != nil {
+				c.handler(c)
+			}
+			return
+		}
+
+		// Call the next middleware from the fixed buffer
+		c.fixedMiddleware[c.middlewareIndex](c)
+		return
+	}
+
+	// Legacy path: use dynamic middleware stack
 	// If we've gone through all middleware, call the final handler
 	if c.middlewareIndex >= len(c.middlewareStack) {
 		if c.handler != nil {
@@ -207,7 +248,7 @@ func (c *Ctx) Next() {
 		return
 	}
 
-	// Call the next middleware
+	// Call the next middleware from the dynamic stack
 	c.middlewareStack[c.middlewareIndex](c)
 }
 
@@ -269,6 +310,7 @@ func ReleaseContext(ctx *Ctx) {
 	}
 
 	ctx.middlewareStack = ctx.middlewareStack[:0]
+	ctx.fixedCount = 0
 	ctx.middlewareIndex = -1
 	ctx.handler = nil
 
@@ -277,6 +319,14 @@ func ReleaseContext(ctx *Ctx) {
 	if ctx.paramCache.params != nil {
 		releaseParamSlice(ctx.paramCache.params)
 		ctx.paramCache.params = nil
+	}
+	if ctx.paramCache.routeParams != nil {
+		releaseRouteParams(ctx.paramCache.routeParams)
+		ctx.paramCache.routeParams = nil
+	}
+	if ctx.paramCache.fixedParams != nil {
+		releaseParams(ctx.paramCache.fixedParams)
+		ctx.paramCache.fixedParams = nil
 	}
 
 	// Reset the query cache but keep the map for reuse
@@ -290,13 +340,6 @@ func ReleaseContext(ctx *Ctx) {
 
 	// Clear the user data map without reallocating
 	if ctx.userData != nil {
-		// Check if there's a parameter context in the UserData map and release it
-		if paramCtx, ok := ctx.userData["__paramCtx"]; ok {
-			if ps, ok := paramCtx.(*paramSlice); ok && ps != nil {
-				releaseParamSlice(ps)
-			}
-		}
-
 		// Clear the map
 		for k := range ctx.userData {
 			delete(ctx.userData, k)
@@ -549,8 +592,10 @@ func (c *Ctx) Get(key string) string {
 
 // cachedParamMap caches the parameters to avoid repeated lookups
 type cachedParamMap struct {
-	params *paramSlice
-	valid  bool
+	params      *paramSlice  // Legacy parameter storage
+	routeParams *routeParams // Parameter storage with separate keys and values slices
+	fixedParams *Params      // New parameter storage with fixed-size arrays
+	valid       bool
 }
 
 // cachedQueryMap caches parsed query parameters to avoid repeated parsing
@@ -595,8 +640,23 @@ func (c *Ctx) Param(key string) string {
 		return ""
 	}
 
-	// Fast path: Use cached parameter slice if available
-	// This is now the primary path since we store parameters directly in paramCache
+	// Fastest path: Use cached fixedParams if available (new optimized path with fixed-size arrays)
+	if c.paramCache.valid && c.paramCache.fixedParams != nil {
+		if value, found := c.paramCache.fixedParams.Get(key); found {
+			return value
+		}
+		return ""
+	}
+
+	// Fast path: Use cached routeParams if available
+	if c.paramCache.valid && c.paramCache.routeParams != nil {
+		if value, found := c.paramCache.routeParams.Get(key); found {
+			return value
+		}
+		return ""
+	}
+
+	// Legacy path: Use cached parameter slice if available
 	if c.paramCache.valid && c.paramCache.params != nil {
 		if value, found := (*c.paramCache.params).Get(key); found {
 			return value
@@ -626,16 +686,8 @@ func (c *Ctx) Param(key string) string {
 
 	// Try the map-based parameter context (legacy path)
 	if paramCtx, ok := ctxValue.(map[paramKey]string); ok && paramCtx != nil {
-		// Get a parameter slice from the pool
-		ps := getParamSlice()
-
-		// Convert map to slice for better performance (only once)
-		// Pre-allocate with exact capacity to avoid reallocations
-		if cap(ps.entries) < len(paramCtx) {
-			ps.entries = make([]paramEntry, 0, len(paramCtx))
-		} else {
-			ps.entries = ps.entries[:0]
-		}
+		// Get a fixed-size params struct from the pool
+		params := getParams()
 
 		// Use a cached key to avoid string allocations
 		paramKey := paramKey(key)
@@ -643,26 +695,26 @@ func (c *Ctx) Param(key string) string {
 		// Check if the key exists in the map directly
 		// This avoids converting the entire map if we just need one value
 		if value, exists := paramCtx[paramKey]; exists {
-			// Add this parameter to the slice first
-			ps.entries = append(ps.entries, paramEntry{key: key, value: value})
+			// Add this parameter to the fixed-size params
+			params.Set(key, value)
 
-			// Cache the parameter slice for future lookups
-			c.paramCache.params = ps
+			// Cache the fixed-size params for future lookups
+			c.paramCache.fixedParams = params
 			c.paramCache.valid = true
 
 			return value
 		}
 
-		// If the key wasn't found, add all parameters to the slice
+		// If the key wasn't found, add all parameters to the fixed-size params
 		// Use a type assertion instead of conversion to avoid string allocations
 		for k, v := range paramCtx {
 			// Use the string representation of k directly without conversion
 			// This is safe because paramKey is just a type alias for string
-			ps.entries = append(ps.entries, paramEntry{key: string(k), value: v})
+			params.Set(string(k), v)
 		}
 
-		// Cache the parameter slice for future lookups
-		c.paramCache.params = ps
+		// Cache the fixed-size params for future lookups
+		c.paramCache.fixedParams = params
 		c.paramCache.valid = true
 
 		// The key wasn't found in the direct lookup, so it doesn't exist
@@ -1040,10 +1092,20 @@ func (c *Ctx) JSON(obj interface{}) {
 	// Fast path for simple types that can be marshaled efficiently
 	switch v := obj.(type) {
 	case string:
-		// For strings, we can write directly with quotes
-		_, _ = c.Writer.Write(jsonQuote)
-		_, _ = c.Writer.Write([]byte(v))
-		_, _ = c.Writer.Write(jsonQuote)
+		// For strings, use a buffer from the pool to avoid []byte conversion
+		buf := jsonBufferPool.Get().(*bytes.Buffer)
+		buf.Reset()
+
+		// Write the string with quotes directly to the buffer
+		buf.Write(jsonQuote)
+		buf.WriteString(v) // Avoid []byte conversion
+		buf.Write(jsonQuote)
+
+		// Write the buffer to the response writer
+		_, _ = c.Writer.Write(buf.Bytes())
+
+		// Return the buffer to the pool
+		jsonBufferPool.Put(buf)
 		return
 	case bool:
 		// For booleans, use pre-allocated values
@@ -1107,17 +1169,19 @@ func (c *Ctx) JSON(obj interface{}) {
 		jsonBufferPool.Put(buf)
 	} else {
 		// Fallback to encoder for complex objects or if Marshal fails
-		buf := jsonBufferPool.Get().(*bytes.Buffer)
+		// Use the bufPool as described in the optimization
+		buf := bufPool.Get().(*bytes.Buffer)
 		buf.Reset()
 
 		if err := json.NewEncoder(buf).Encode(obj); err != nil {
-			c.Error(fmt.Errorf("JSON encoding error: %w", err))
+			// Use pre-allocated error message to avoid allocation
+			c.Error(jsonEncodingErr)
 		} else {
 			_, _ = c.Writer.Write(buf.Bytes())
 		}
 
 		// Return the buffer to the pool
-		jsonBufferPool.Put(buf)
+		bufPool.Put(buf)
 	}
 }
 

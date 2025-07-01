@@ -1,8 +1,11 @@
 package ngebut
 
 import (
-	"context"
 	"fmt"
+	"github.com/ryanbekhen/ngebut/internal/filebuffer"
+	"github.com/ryanbekhen/ngebut/internal/filecache"
+	"github.com/ryanbekhen/ngebut/internal/radix"
+	"github.com/ryanbekhen/ngebut/internal/unsafe"
 	"io"
 	"mime"
 	"os"
@@ -12,10 +15,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/ryanbekhen/ngebut/internal/filebuffer"
-	"github.com/ryanbekhen/ngebut/internal/filecache"
-	"github.com/ryanbekhen/ngebut/internal/radix"
 )
 
 // route represents a route with a pattern, method, and handlers.
@@ -34,8 +33,8 @@ type route struct {
 // instead of creating new ones for each request.
 var middlewareStackPool = sync.Pool{
 	New: func() interface{} {
-		// Create a middleware stack with a reasonable initial capacity
-		return make([]MiddlewareFunc, 0, 16)
+		// Create a middleware stack with a larger initial capacity to reduce allocations
+		return make([]MiddlewareFunc, 0, 32)
 	},
 }
 
@@ -1346,37 +1345,34 @@ func (r *paramContextReleaser) release() {
 func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches []string, path string) {
 	// Extract URL parameters using precomputed values
 	if route.HasParams {
-		// Get a parameter context map from the pool
-		paramCtx := getParamContext()
+		// Get a routeParams struct from the pool (new optimized approach)
+		routeParams := getRouteParams()
 
 		// Store parameters directly in the context's paramCache
 		// This avoids the expensive context.WithValue and req.WithContext operations
-		ctx.paramCache.params = paramCtx
+		ctx.paramCache.routeParams = routeParams
 		ctx.paramCache.valid = true
-
-		// Pre-allocate the entries slice based on the precomputed parameter count
-		if cap(paramCtx.entries) < route.ParamCount {
-			paramCtx.entries = make([]paramEntry, 0, route.ParamCount)
-		} else {
-			paramCtx.entries = paramCtx.entries[:0]
-		}
 
 		// Extract parameters directly from regex matches using precomputed parameter names
 		// The regex pattern is created to capture each parameter in order
 		paramIndex := 1 // Start from 1 to skip the full match
 
+		// Reset the keys and values slices without allocating
+		// This is safe because we've pre-allocated the slices with capacity for common routes
+		routeParams.Reset()
+
 		// Use the precomputed parameter names to avoid string slicing at runtime
 		for _, paramName := range route.ParamNames {
 			if paramIndex < len(matches) {
-				// Add directly to the entries slice
-				paramCtx.entries = append(paramCtx.entries, paramEntry{key: paramName, value: matches[paramIndex]})
+				// Add directly to the keys and values slices
+				routeParams.keys = append(routeParams.keys, paramName)
+				routeParams.values = append(routeParams.values, matches[paramIndex])
 				paramIndex++
 			}
 		}
 
-		// Store the parameter context in the Ctx for later release
-		// This avoids the expensive context.WithValue and req.WithContext operations
-		ctx.UserData("__paramCtx", paramCtx)
+		// We don't need to store the parameter context in UserData anymore
+		// It's already stored in ctx.paramCache.routeParams
 	}
 
 	// Update the request in the context
@@ -1411,6 +1407,37 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 		return
 	}
 
+	// Ultra-fast path: use fixed-size buffer if the total middleware count fits
+	// This avoids all allocations and slice manipulations
+	if totalMiddleware <= len(ctx.fixedMiddleware) {
+		// Reset the fixed middleware count
+		ctx.fixedCount = totalMiddleware
+
+		// Copy the global middleware functions directly to the fixed buffer
+		if globalMiddlewareCount > 0 {
+			for i := 0; i < globalMiddlewareCount; i++ {
+				ctx.fixedMiddleware[i] = r.middlewareFuncs[i]
+			}
+		}
+
+		// Add all but the last handler as middleware directly to the fixed buffer
+		if handlerCount > 1 {
+			for i := 0; i < handlerCount-1; i++ {
+				// We must use type conversion here as Handler and MiddlewareFunc are not directly compatible
+				ctx.fixedMiddleware[globalMiddlewareCount+i] = MiddlewareFunc(handlers[i])
+			}
+		}
+
+		// Set the last handler as the final handler
+		ctx.middlewareIndex = -1
+		ctx.handler = handlers[handlerCount-1]
+
+		// Call the first middleware function
+		ctx.Next()
+		return
+	}
+
+	// Legacy path: use dynamic middleware stack for larger middleware chains
 	// Prepare the middleware stack
 	// Try to reuse the existing slice first
 	if cap(ctx.middlewareStack) >= totalMiddleware {
@@ -1426,15 +1453,35 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 		} else {
 			// Return the too-small stack to the pool
 			middlewareStackPool.Put(stack)
-			// Create a new stack with sufficient capacity
-			// Add some extra capacity to reduce future allocations
-			extraCapacity := 8
-			if totalMiddleware > 32 {
-				extraCapacity = totalMiddleware / 4 // 25% extra for large stacks
+
+			// Get another stack from the pool - we've increased the default capacity,
+			// so this should be rare
+			stack = middlewareStackPool.Get().([]MiddlewareFunc)
+
+			if cap(stack) >= totalMiddleware {
+				// Use this stack if it's big enough
+				ctx.middlewareStack = stack[:totalMiddleware]
+			} else {
+				// Return this stack too
+				middlewareStackPool.Put(stack)
+
+				// Create a new stack with sufficient capacity
+				// Add some extra capacity to reduce future allocations
+				// Use a larger minimum extra capacity
+				extraCapacity := 16
+				if totalMiddleware > 32 {
+					extraCapacity = totalMiddleware / 2 // 50% extra for large stacks
+				}
+
+				// Create the new stack and add it to the pool for future reuse
+				newStack := make([]MiddlewareFunc, totalMiddleware, totalMiddleware+extraCapacity)
+				ctx.middlewareStack = newStack
 			}
-			ctx.middlewareStack = make([]MiddlewareFunc, totalMiddleware, totalMiddleware+extraCapacity)
 		}
 	}
+
+	// Reset the fixed middleware count to indicate we're using the dynamic stack
+	ctx.fixedCount = 0
 
 	// Copy the global middleware functions in one operation if any exist
 	if globalMiddlewareCount > 0 {
@@ -1470,49 +1517,53 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 	path := req.URL.Path
 	method := req.Method
 
-	// Fast path: try to find a match using the radix tree
+	// Convert path to byte slice without allocation using unsafe
+	pathBytes := unsafe.S2B(path)
+
+	// Ultra-fast path: try to find a static match using the radix tree
+	// This avoids allocating a params map for static routes
 	if tree, exists := r.routeTrees[method]; exists {
+		// First try to find a static match (no parameters)
+		if handlers, found := tree.FindStaticBytes(pathBytes); found {
+			if handlerSlice, ok := handlers[method].([]Handler); ok {
+				// We found a static match, handle it without parameter processing
+				// Set up middleware and call the handler
+				r.setupMiddleware(ctx, handlerSlice)
+				return
+			}
+		}
+
+		// If no static match, try with parameters
 		// Get a map from the pool to store path parameters
 		params := getParamsMap()
 
-		// Try to find a match in the radix tree
-		if handlers, found := tree.Find(path, params); found {
+		// Try to find a match in the radix tree using byte slice path
+		if handlers, found := tree.FindBytes(pathBytes, params); found {
 			if handlerSlice, ok := handlers[method].([]Handler); ok {
 				// We found a match, handle it
 				// Create a context with the parameters
 				if len(params) > 0 {
-					// Get a parameter context map from the pool
-					paramCtx := getParamContext()
+					// Get a routeParams struct from the pool (new optimized approach)
+					routeParams := getRouteParams()
 
 					// Store parameters directly in the context's paramCache
 					// This avoids the expensive context.WithValue call
-					ctx.paramCache.params = paramCtx
+					ctx.paramCache.routeParams = routeParams
 					ctx.paramCache.valid = true
 
-					// Pre-allocate the entries slice if needed
-					if cap(paramCtx.entries) < len(params) {
-						paramCtx.entries = make([]paramEntry, 0, len(params))
-					} else {
-						paramCtx.entries = paramCtx.entries[:0]
-					}
+					// Reset the keys and values slices without allocating
+					// This is safe because we've pre-allocated the slices with capacity for common routes
+					routeParams.Reset()
 
 					// Copy parameters from the radix tree match
-					// Add all parameters to the slice in one pass
+					// Add all parameters to the keys and values slices in one pass
 					for k, v := range params {
-						paramCtx.entries = append(paramCtx.entries, paramEntry{key: k, value: v})
+						routeParams.keys = append(routeParams.keys, k)
+						routeParams.values = append(routeParams.values, v)
 					}
 
-					// We still need to release the parameter context when done
-					// Store the original request context to avoid losing any existing context values
-					originalReqCtx := req.Context()
-
-					// Create a context that will release the parameter context when done
-					reqCtx := context.WithValue(originalReqCtx, releaseParamContextKey{}, func() {
-						releaseParamContext(paramCtx)
-					})
-
-					req = req.WithContext(reqCtx)
-					ctx.Request = req
+					// We don't need to store the parameter context in UserData anymore
+					// It's already stored in ctx.paramCache.routeParams
 				}
 
 				// Release the params map back to the pool
@@ -1556,7 +1607,8 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 		}
 
 		// Try to find a match in the radix tree for other methods
-		if _, found := tree.Find(path, nil); found {
+		// Use byte slice path to avoid allocations
+		if _, found := tree.FindBytes(pathBytes, nil); found {
 			methodNotAllowed = true
 			allowedMethods = append(allowedMethods, treeMethod)
 		}
