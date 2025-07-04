@@ -225,10 +225,11 @@ func (c *Ctx) GetError() error {
 func (c *Ctx) Next() {
 	c.middlewareIndex++
 
-	// Fast path: use fixed-size buffer if available
+	// Ultra-fast path: use fixed-size buffer if available
 	if c.fixedCount > 0 {
 		// If we've gone through all middleware in the fixed buffer, call the final handler
 		if c.middlewareIndex >= c.fixedCount {
+			// We need to check if the handler is nil to avoid panics
 			if c.handler != nil {
 				c.handler(c)
 			}
@@ -236,13 +237,18 @@ func (c *Ctx) Next() {
 		}
 
 		// Call the next middleware from the fixed buffer
+		// This is the most common case, so we optimize it
 		c.fixedMiddleware[c.middlewareIndex](c)
 		return
 	}
 
 	// Legacy path: use dynamic middleware stack
-	// If we've gone through all middleware, call the final handler
-	if c.middlewareIndex >= len(c.middlewareStack) {
+	// This path is only used for backward compatibility
+	middlewareLen := len(c.middlewareStack)
+
+	// Fast check if we've gone through all middleware
+	if c.middlewareIndex >= middlewareLen {
+		// We need to check if the handler is nil to avoid panics
 		if c.handler != nil {
 			c.handler(c)
 		}
@@ -250,6 +256,7 @@ func (c *Ctx) Next() {
 	}
 
 	// Call the next middleware from the dynamic stack
+	// This is the slowest path, but it's rarely used
 	c.middlewareStack[c.middlewareIndex](c)
 }
 

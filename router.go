@@ -571,7 +571,7 @@ func getFDCacheInstance(maxSize int, expiration time.Duration) *filecache.FDCach
 
 // serveFile serves a single file
 func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
-	// Determine content type using the cache
+	// Determine content type using the cache - do this once and reuse
 	contentType := getMimeType(filepath.Ext(filePath))
 
 	// Check if in-memory caching is enabled
@@ -592,11 +592,12 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 					config.ModifyResponse(c)
 				}
 
-				// Set content type header
+				// Set content type header directly from cached value
 				c.Set("Content-Type", cachedFile.ContentType)
 
-				// Serve from cache
-				c.Data(cachedFile.ContentType, cachedFile.Data)
+				// Serve from cache - write directly to avoid allocation
+				c.Writer.WriteHeader(c.statusCode)
+				_, _ = c.Writer.Write(cachedFile.Data)
 				return
 			}
 		}
@@ -614,9 +615,34 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 
 			// Set content type header
 			c.Set("Content-Type", contentType)
+			c.Writer.WriteHeader(c.statusCode)
 
-			// Open the file
-			file, err := os.Open(filePath)
+			// Try to get a cached file descriptor first
+			fdCache := getFDCacheInstance(100, 5*time.Minute)
+			var file *os.File
+			var err error
+
+			if fd, exists := fdCache.Get(filePath); exists && !fdCache.IsModified(filePath, fileInfo) {
+				// Use the cached file descriptor
+				file = fd.File
+
+				// Seek to the beginning of the file
+				if _, err = file.Seek(0, 0); err == nil {
+					// Get a read buffer from the pool for more efficient copying
+					buf := filebuffer.GetReadBuffer()
+					_, err = io.CopyBuffer(c.Writer, file, buf)
+					filebuffer.ReleaseReadBuffer(buf)
+
+					if err == nil {
+						return
+					}
+				}
+				// If seeking or copying fails, we'll fall through to opening a new file
+				fdCache.Remove(filePath)
+			}
+
+			// Open the file if we couldn't use a cached descriptor
+			file, err = os.Open(filePath)
 			if err != nil {
 				c.Status(StatusInternalServerError)
 				c.String("Error opening file")
@@ -624,8 +650,11 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 			}
 			defer file.Close()
 
-			// Stream directly to the response writer
-			_, err = io.Copy(c.Writer, file)
+			// Get a read buffer from the pool for more efficient copying
+			buf := filebuffer.GetReadBuffer()
+			_, err = io.CopyBuffer(c.Writer, file, buf)
+			filebuffer.ReleaseReadBuffer(buf)
+
 			if err != nil {
 				logger.Error().Err(err).Msg("Error streaming file to response")
 			}
@@ -676,9 +705,11 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 		// Reset the buffer to ensure it's empty
 		buf.Reset()
 
-		// Use io.Copy to efficiently stream the file to the buffer
-		// This avoids manual read/write loops and is more efficient
-		_, err = io.Copy(buf, file)
+		// Use io.Copy with a read buffer from the pool for more efficient copying
+		readBuf := filebuffer.GetReadBuffer()
+		_, err = io.CopyBuffer(buf, file, readBuf)
+		filebuffer.ReleaseReadBuffer(readBuf)
+
 		if err != nil {
 			c.Status(StatusInternalServerError)
 			c.String("Error reading file")
@@ -699,6 +730,7 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 
 		// Set content type header
 		c.Set("Content-Type", contentType)
+		c.Writer.WriteHeader(c.statusCode)
 
 		// Stream the buffer directly to the response writer
 		// This avoids an extra allocation and copy
@@ -720,10 +752,34 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 
 		// Set the content type header
 		c.Set("Content-Type", contentType)
+		c.Writer.WriteHeader(c.statusCode)
 
-		// Open the file directly without caching the descriptor
-		// This is more efficient for large files that are accessed infrequently
-		file, err := os.Open(filePath)
+		// Try to get a cached file descriptor first
+		fdCache := getFDCacheInstance(100, 5*time.Minute)
+		var file *os.File
+		var err error
+
+		if fd, exists := fdCache.Get(filePath); exists && !fdCache.IsModified(filePath, fileInfo) {
+			// Use the cached file descriptor
+			file = fd.File
+
+			// Seek to the beginning of the file
+			if _, err = file.Seek(0, 0); err == nil {
+				// Get a read buffer from the pool for more efficient copying
+				buf := filebuffer.GetReadBuffer()
+				_, err = io.CopyBuffer(c.Writer, file, buf)
+				filebuffer.ReleaseReadBuffer(buf)
+
+				if err == nil {
+					return
+				}
+			}
+			// If seeking or copying fails, we'll fall through to opening a new file
+			fdCache.Remove(filePath)
+		}
+
+		// Open the file if we couldn't use a cached descriptor
+		file, err = os.Open(filePath)
 		if err != nil {
 			c.Status(StatusInternalServerError)
 			c.String("Error opening file")
@@ -731,8 +787,11 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 		}
 		defer file.Close()
 
-		// Stream directly to the response writer
-		_, err = io.Copy(c.Writer, file)
+		// Get a read buffer from the pool for more efficient copying
+		buf := filebuffer.GetReadBuffer()
+		_, err = io.CopyBuffer(c.Writer, file, buf)
+		filebuffer.ReleaseReadBuffer(buf)
+
 		if err != nil {
 			logger.Error().Err(err).Msg("Error streaming file to response")
 		}
@@ -786,10 +845,13 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 
 	// Set content type header
 	c.Set("Content-Type", contentType)
+	c.Writer.WriteHeader(c.statusCode)
 
-	// Use io.Copy to efficiently stream the file directly to the response writer
-	// This avoids manual read/write loops and buffer allocations
-	_, err = io.Copy(c.Writer, file)
+	// Use io.CopyBuffer with a read buffer from the pool for more efficient copying
+	buf := filebuffer.GetReadBuffer()
+	_, err = io.CopyBuffer(c.Writer, file, buf)
+	filebuffer.ReleaseReadBuffer(buf)
+
 	if err != nil {
 		logger.Error().Err(err).Msg("Error streaming file to response")
 	}
@@ -2065,5 +2127,12 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 	allowedMethodsPool.Put(allowedMethods)
 
 	// No route matched, use the NotFound handler
-	r.setupMiddleware(ctx, []Handler{r.NotFound})
+	// Fast path: directly call NotFound handler without middleware if possible
+	if len(r.middlewareFuncs) == 0 {
+		// No middleware, just call the handler directly
+		r.NotFound(ctx)
+	} else {
+		// Use setupMiddleware with a pre-allocated slice to avoid allocation
+		r.setupMiddleware(ctx, []Handler{r.NotFound})
+	}
 }

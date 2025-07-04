@@ -3,7 +3,6 @@ package httpparser
 import (
 	"testing"
 
-	"github.com/evanphx/wildcat"
 	"github.com/stretchr/testify/assert"
 	"github.com/valyala/bytebufferpool"
 )
@@ -94,7 +93,7 @@ func TestCodecGetContentLength(t *testing.T) {
 
 	// Test when ContentLength is not set and Content-Length header is not present
 	hc.ContentLength = -1
-	hc.Parser = parserPool.Get().(*wildcat.HTTPParser)
+	hc.Parser = parserPool.Get()
 
 	// Simulate a request without Content-Length header
 	hc.Parser.Parse([]byte("GET / HTTP/1.1\r\n\r\n"))

@@ -19,8 +19,8 @@ import (
 
 // Constants for HTTP parsing
 var (
-	crlf      = []byte("\r\n\r\n")
-	lastChunk = []byte("0\r\n\r\n")
+	doubleCRLF = []byte("\r\n\r\n")
+	lastChunk  = []byte("0\r\n\r\n")
 )
 
 // Object pools for reusing frequently created objects
@@ -155,9 +155,6 @@ const (
 
 	// Average size of a status code (3 digits)
 	statusCodeAvgSize = 3
-
-	// Average size of a content length (assuming most responses < 10KB)
-	contentLengthAvgSize = 4
 )
 
 // EstimateResponseSize calculates the estimated size of an HTTP response.
@@ -290,7 +287,7 @@ func (hc *Codec) Parse(data []byte) (int, []byte, error) {
 		}
 	} else {
 		// For larger data, use bytes.Index
-		if idx := bytes.Index(data, doubleCrlfBytes); idx != -1 {
+		if idx := bytes.Index(data, doubleCRLF); idx != -1 {
 			return idx + 4, nil, nil
 		}
 	}
@@ -519,7 +516,7 @@ func (hc *Codec) GetContentLength() int {
 	}
 
 	// Use pre-allocated byte slice for header name to avoid allocations
-	val := hc.Parser.FindHeader(contentLengthBytes)
+	val := hc.Parser.FindHeader([]byte("Content-Length"))
 	if val == nil {
 		hc.ContentLength = -1 // Cache the result
 		return -1             // No Content-Length header
@@ -595,9 +592,6 @@ var (
 	// contentLengthPrefix is the prefix for the Content-Length header
 	contentLengthPrefix = []byte("Content-Length: ")
 
-	// contentLengthBytes is the byte representation of "Content-Length" header name
-	contentLengthBytes = []byte("Content-Length")
-
 	// httpVersion is the HTTP version string
 	httpVersion = []byte("HTTP/1.1 ")
 
@@ -606,9 +600,6 @@ var (
 
 	// crlfBytes is the CRLF byte sequence
 	crlfBytes = []byte("\r\n")
-
-	// doubleCrlfBytes is the double CRLF byte sequence that ends headers
-	doubleCrlfBytes = []byte("\r\n\r\n")
 
 	// colonSpace is the colon+space sequence used in headers
 	colonSpace = []byte(": ")
@@ -714,7 +705,10 @@ func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
 	// Add Content-Length header
 	hc.Buf.Write(contentLengthPrefix)
 	hc.Buf.B = strconv.AppendInt(hc.Buf.B, int64(len(body)), 10)
-	hc.Buf.Write(doubleCrlfBytes)
+	hc.Buf.Write(crlfBytes)
+
+	// Add an additional CRLF to separate headers from body
+	hc.Buf.Write(crlfBytes)
 
 	// Add body
 	if len(body) > 0 {
