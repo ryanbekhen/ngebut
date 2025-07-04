@@ -1304,25 +1304,16 @@ var releaseParamContextPool = sync.Pool{
 	},
 }
 
-// paramsMapPool is a pool of map[string]string objects for reuse
-var paramsMapPool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]string, 8) // Pre-allocate with capacity for 8 params
-	},
-}
-
 // getParamsMap gets a parameter map from the pool
+// This uses the paramMapPool from param.go to avoid duplication
 func getParamsMap() map[string]string {
-	return paramsMapPool.Get().(map[string]string)
+	return getParamMap()
 }
 
 // releaseParamsMap returns a parameter map to the pool
+// This uses the paramMapPool from param.go to avoid duplication
 func releaseParamsMap(m map[string]string) {
-	// Clear the map
-	for k := range m {
-		delete(m, k)
-	}
-	paramsMapPool.Put(m)
+	releaseParamMap(m)
 }
 
 // getParamContextReleaser gets a paramContextReleaser from the pool and initializes it
@@ -1567,6 +1558,66 @@ var methodNotAllowedHandler = func(c *Ctx) {
 	c.String("Method Not Allowed")
 }
 
+// pathMatchContext is a reusable context for path matching operations
+// It pre-allocates memory for common operations to reduce allocations
+type pathMatchContext struct {
+	// Segments for path matching
+	segments []string
+
+	// Temporary byte slice for path operations
+	pathBytes []byte
+
+	// Reusable parameter map
+	params map[string]string
+
+	// Pre-allocated slices for parameter keys and values
+	// These are used to avoid allocations when copying parameters
+	paramKeys   []string
+	paramValues []string
+}
+
+// Reset resets the context for reuse
+func (c *pathMatchContext) Reset() {
+	// Clear segments without deallocating
+	c.segments = c.segments[:0]
+
+	// Clear pathBytes without deallocating
+	c.pathBytes = c.pathBytes[:0]
+
+	// Clear params without deallocating
+	for k := range c.params {
+		delete(c.params, k)
+	}
+
+	// Clear parameter keys and values without deallocating
+	c.paramKeys = c.paramKeys[:0]
+	c.paramValues = c.paramValues[:0]
+}
+
+// pathMatchContextPool is a pool of pathMatchContext objects
+var pathMatchContextPool = sync.Pool{
+	New: func() interface{} {
+		return &pathMatchContext{
+			segments:    make([]string, 0, 16),      // Pre-allocate for common path depth
+			pathBytes:   make([]byte, 0, 128),       // Pre-allocate for common path length
+			params:      make(map[string]string, 8), // Pre-allocate for common number of params
+			paramKeys:   make([]string, 0, 16),      // Pre-allocate for common number of parameters
+			paramValues: make([]string, 0, 16),      // Pre-allocate for common number of parameters
+		}
+	},
+}
+
+// getPathMatchContext gets a pathMatchContext from the pool
+func getPathMatchContext() *pathMatchContext {
+	return pathMatchContextPool.Get().(*pathMatchContext)
+}
+
+// releasePathMatchContext returns a pathMatchContext to the pool
+func releasePathMatchContext(ctx *pathMatchContext) {
+	ctx.Reset()
+	pathMatchContextPool.Put(ctx)
+}
+
 // ServeHTTP implements a modified http.Handler interface that accepts a Ctx.
 func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 	path := req.URL.Path
@@ -1589,15 +1640,16 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 		}
 
 		// If no static match, try with parameters
-		// Get a map from the pool to store path parameters
-		params := getParamsMap()
+		// Get a path match context from the pool for optimized path matching
+		pathCtx := getPathMatchContext()
+		defer releasePathMatchContext(pathCtx)
 
 		// Try to find a match in the radix tree using byte slice path
-		if handlers, found := tree.FindBytes(pathBytes, params); found {
+		if handlers, found := tree.FindBytes(pathBytes, pathCtx.params); found {
 			if handlerSlice, ok := handlers[method].([]Handler); ok {
 				// We found a match, handle it
 				// Create a context with the parameters
-				if len(params) > 0 {
+				if len(pathCtx.params) > 0 {
 					// Get a routeParams struct from the pool (new optimized approach)
 					routeParams := getRouteParams()
 
@@ -1612,46 +1664,46 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 
 					// Copy parameters from the radix tree match
 					// First try to use fixed-size arrays for parameters (zero allocation path)
-					paramCount := len(params)
+					paramCount := len(pathCtx.params)
 					useFixedArrays := paramCount <= len(routeParams.fixedKeys)
+
+					// Extract parameter keys and values into pre-allocated slices
+					// This avoids map iteration which can be slow
+					pathCtx.paramKeys = pathCtx.paramKeys[:0]
+					pathCtx.paramValues = pathCtx.paramValues[:0]
+
+					for k, v := range pathCtx.params {
+						pathCtx.paramKeys = append(pathCtx.paramKeys, k)
+						pathCtx.paramValues = append(pathCtx.paramValues, v)
+					}
 
 					// Fast path for common case of 1-2 parameters
 					if useFixedArrays && paramCount <= 2 && paramCount > 0 {
 						// Unrolled loop for 1-2 parameters (most common case)
 						// This avoids the loop overhead and bounds checking
-						i := 0
-						for k, v := range params {
-							if i == 0 {
-								routeParams.fixedKeys[0] = k
-								routeParams.fixedValues[0] = v
-								routeParams.count = 1
-								i++
-								// If there's only one parameter, we're done
-								if paramCount == 1 {
-									break
-								}
-							} else if i == 1 {
-								routeParams.fixedKeys[1] = k
-								routeParams.fixedValues[1] = v
-								routeParams.count = 2
-								break
-							}
+						routeParams.fixedKeys[0] = pathCtx.paramKeys[0]
+						routeParams.fixedValues[0] = pathCtx.paramValues[0]
+						routeParams.count = 1
+
+						// If there's a second parameter, add it
+						if paramCount == 2 {
+							routeParams.fixedKeys[1] = pathCtx.paramKeys[1]
+							routeParams.fixedValues[1] = pathCtx.paramValues[1]
+							routeParams.count = 2
 						}
 					} else {
 						// General case for any number of parameters
-						i := 0
-						for k, v := range params {
+						for i := 0; i < paramCount; i++ {
 							if useFixedArrays {
 								// Use fixed-size arrays for small number of parameters (zero allocation)
-								routeParams.fixedKeys[i] = k
-								routeParams.fixedValues[i] = v
+								routeParams.fixedKeys[i] = pathCtx.paramKeys[i]
+								routeParams.fixedValues[i] = pathCtx.paramValues[i]
 								routeParams.count++
 							} else {
 								// Fall back to dynamic slices for routes with many parameters
-								routeParams.keys = append(routeParams.keys, k)
-								routeParams.values = append(routeParams.values, v)
+								routeParams.keys = append(routeParams.keys, pathCtx.paramKeys[i])
+								routeParams.values = append(routeParams.values, pathCtx.paramValues[i])
 							}
-							i++
 						}
 					}
 
@@ -1659,17 +1711,11 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 					// It's already stored in ctx.paramCache.routeParams
 				}
 
-				// Release the params map back to the pool
-				releaseParamsMap(params)
-
 				// Set up middleware and call the handler
 				r.setupMiddleware(ctx, handlerSlice)
 				return
 			}
 		}
-
-		// Release the params map back to the pool if no match was found
-		releaseParamsMap(params)
 	}
 
 	// Fallback to regex-based routing for backward compatibility
