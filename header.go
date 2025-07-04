@@ -259,6 +259,31 @@ func NewHeaderFromMap(m map[string][]string) *Header {
 	return &h
 }
 
+// UpdateHeaderFromMap updates an existing Header with values from a map[string][]string.
+// This function avoids allocating a new Header map, reducing memory allocations.
+// It returns the updated Header.
+func UpdateHeaderFromMap(h *Header, m map[string][]string) *Header {
+	// Clear the existing header
+	for k := range *h {
+		delete(*h, k)
+	}
+
+	// Fast path for empty map
+	if len(m) == 0 {
+		return h
+	}
+
+	// Copy only non-empty values
+	for k, v := range m {
+		if len(v) == 0 {
+			continue
+		}
+		(*h)[k] = v // Direct reference, no copy
+	}
+
+	return h
+}
+
 // stringWriter is the interface that wraps the WriteString method.
 // It is used by Header.Write and Header.WriteSubset to write headers in wire format.
 type stringWriter interface {

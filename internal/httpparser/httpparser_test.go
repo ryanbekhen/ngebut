@@ -3,8 +3,8 @@ package httpparser
 import (
 	"testing"
 
-	"github.com/evanphx/wildcat"
 	"github.com/stretchr/testify/assert"
+	"github.com/valyala/bytebufferpool"
 )
 
 // TestEstimateResponseSize tests the EstimateResponseSize function
@@ -38,11 +38,15 @@ func TestCodec(t *testing.T) {
 	assert.Equal(t, -1, hc.ContentLength, "ContentLength should be -1 after ResetParser")
 
 	// Test Reset method
-	hc.Buf = append(hc.Buf, []byte("test")...)
+	// Initialize Buf if it's nil
+	if hc.Buf == nil {
+		hc.Buf = bytebufferpool.Get()
+	}
+	hc.Buf.Write([]byte("test"))
 	hc.ContentLength = 100
 	hc.Reset()
 	assert.Equal(t, -1, hc.ContentLength, "ContentLength should be -1 after Reset")
-	assert.Empty(t, hc.Buf, "Buffer should be empty after Reset")
+	assert.Nil(t, hc.Buf, "Buffer should be nil after Reset")
 
 	// Test WriteResponse method
 	statusCode := 200
@@ -51,21 +55,23 @@ func TestCodec(t *testing.T) {
 	}
 	body := []byte("Hello, World!")
 
+	// Create a new Codec since the previous one's Buf is nil after Reset
+	hc = NewCodec(nil)
 	hc.WriteResponse(statusCode, header, body)
 
 	// Check that the buffer contains the expected response
-	assert.NotEmpty(t, hc.Buf, "WriteResponse should write data to the buffer")
+	assert.NotEmpty(t, hc.Buf.B, "WriteResponse should write data to the buffer")
 
 	// Check for status line
 	statusLine := "HTTP/1.1 200 OK\r\n"
-	assert.Contains(t, string(hc.Buf), statusLine, "Response should contain status line")
+	assert.Contains(t, string(hc.Buf.B), statusLine, "Response should contain status line")
 
 	// Check for header
 	headerLine := "Content-Type: text/plain\r\n"
-	assert.Contains(t, string(hc.Buf), headerLine, "Response should contain header")
+	assert.Contains(t, string(hc.Buf.B), headerLine, "Response should contain header")
 
 	// Check for body
-	assert.Contains(t, string(hc.Buf), string(body), "Response should contain body")
+	assert.Contains(t, string(hc.Buf.B), string(body), "Response should contain body")
 }
 
 // TestCodecGetContentLength tests the GetContentLength method of Codec
@@ -87,7 +93,7 @@ func TestCodecGetContentLength(t *testing.T) {
 
 	// Test when ContentLength is not set and Content-Length header is not present
 	hc.ContentLength = -1
-	hc.Parser = parserPool.Get().(*wildcat.HTTPParser)
+	hc.Parser = parserPool.Get()
 
 	// Simulate a request without Content-Length header
 	hc.Parser.Parse([]byte("GET / HTTP/1.1\r\n\r\n"))

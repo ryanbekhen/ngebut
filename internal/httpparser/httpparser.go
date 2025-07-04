@@ -12,46 +12,40 @@ import (
 	"time"
 
 	"github.com/evanphx/wildcat"
+	"github.com/ryanbekhen/ngebut/internal/pool"
 	internalunsafe "github.com/ryanbekhen/ngebut/internal/unsafe"
+	"github.com/valyala/bytebufferpool"
 )
 
 // Constants for HTTP parsing
 var (
-	crlf      = []byte("\r\n\r\n")
-	lastChunk = []byte("0\r\n\r\n")
+	doubleCRLF = []byte("\r\n\r\n")
+	lastChunk  = []byte("0\r\n\r\n")
 )
 
 // Object pools for reusing frequently created objects
 var (
 	// parserPool reuses HTTP parsers
-	parserPool = sync.Pool{
-		New: func() interface{} {
-			return wildcat.NewHTTPParser()
-		},
-	}
+	parserPool = pool.New(func() *wildcat.HTTPParser {
+		return wildcat.NewHTTPParser()
+	})
 
 	// readerPool reuses bufio.Reader objects
-	readerPool = sync.Pool{
-		New: func() interface{} {
-			return bufio.NewReaderSize(nil, 8192) // Increased to 8KB for better performance
-		},
-	}
+	readerPool = pool.New(func() *bufio.Reader {
+		return bufio.NewReaderSize(nil, 16384) // Increased to 16KB for better performance
+	})
 
 	// bytesReaderPool reuses bytes.Reader objects
-	bytesReaderPool = sync.Pool{
-		New: func() interface{} {
-			return bytes.NewReader(nil)
-		},
-	}
+	bytesReaderPool = pool.New(func() *bytes.Reader {
+		return bytes.NewReader(nil)
+	})
 
 	// bodyReaderPool reuses io.ReadCloser objects for request bodies
-	bodyReaderPool = sync.Pool{
-		New: func() interface{} {
-			return &bodyReader{
-				reader: bytes.NewReader(nil),
-			}
-		},
-	}
+	bodyReaderPool = pool.New(func() *bodyReader {
+		return &bodyReader{
+			reader: bytes.NewReader(nil),
+		}
+	})
 
 	// Common status codes as byte slices to avoid conversions
 	statusCodeBytes = make(map[int][]byte)
@@ -91,7 +85,7 @@ func (b *bodyReader) Reset(data []byte) {
 
 // GetBodyReader returns a reusable io.ReadCloser for request bodies
 func GetBodyReader(data []byte) io.ReadCloser {
-	br := bodyReaderPool.Get().(*bodyReader)
+	br := bodyReaderPool.Get()
 	br.Reset(data)
 	return br
 }
@@ -105,7 +99,7 @@ func ReleaseBodyReader(rc io.ReadCloser) {
 
 // GetReader returns a reusable bufio.Reader
 func GetReader() *bufio.Reader {
-	return readerPool.Get().(*bufio.Reader)
+	return readerPool.Get()
 }
 
 // ReleaseReader returns a bufio.Reader to the pool
@@ -116,7 +110,7 @@ func ReleaseReader(r *bufio.Reader) {
 
 // GetBytesReader returns a reusable bytes.Reader
 func GetBytesReader() *bytes.Reader {
-	return bytesReaderPool.Get().(*bytes.Reader)
+	return bytesReaderPool.Get()
 }
 
 // ReleaseBytesReader returns a bytes.Reader to the pool
@@ -138,7 +132,7 @@ type Header map[string][]string
 type Codec struct {
 	Parser        *wildcat.HTTPParser
 	ContentLength int
-	Buf           []byte
+	Buf           *bytebufferpool.ByteBuffer
 	Router        interface{} // Using interface{} to avoid cyclic imports
 }
 
@@ -161,9 +155,6 @@ const (
 
 	// Average size of a status code (3 digits)
 	statusCodeAvgSize = 3
-
-	// Average size of a content length (assuming most responses < 10KB)
-	contentLengthAvgSize = 4
 )
 
 // EstimateResponseSize calculates the estimated size of an HTTP response.
@@ -240,27 +231,65 @@ func (hc *Codec) Parse(data []byte) (int, []byte, error) {
 	}
 
 	// Transfer-Encoding: chunked (less common case)
-	if idx := bytes.Index(data[bodyOffset:], lastChunk); idx != -1 {
-		bodyEnd := bodyOffset + idx + 5
-		if len(data) < bodyEnd {
-			return 0, nil, ErrIncompleteBody
-		}
+	// Use a more efficient approach to find the last chunk marker
+	dataLen := len(data)
+	bodyData := data[bodyOffset:]
+	bodyLen := len(bodyData)
 
-		// Try the optimized chunked body parser first
-		chunkedBody, err := parseChunkedBody(data[bodyOffset : bodyEnd-5])
-		if err == nil {
-			return bodyEnd, chunkedBody, nil
-		}
+	// Fast path for small bodies - direct search for "0\r\n\r\n"
+	if bodyLen < 256 {
+		for i := 0; i <= bodyLen-5; i++ {
+			if bodyData[i] == '0' &&
+				bodyData[i+1] == '\r' &&
+				bodyData[i+2] == '\n' &&
+				bodyData[i+3] == '\r' &&
+				bodyData[i+4] == '\n' {
+				bodyEnd := bodyOffset + i + 5
+				// Try the optimized chunked body parser first
+				chunkedBody, err := parseChunkedBody(data[bodyOffset : bodyEnd-5])
+				if err == nil {
+					return bodyEnd, chunkedBody, nil
+				}
 
-		// Fallback to standard library for complex cases
-		body, err := parseChunkedBodyFallback(data[:bodyEnd])
-		return bodyEnd, body, err
+				// Fallback to standard library for complex cases
+				body, err := parseChunkedBodyFallback(data[:bodyEnd])
+				return bodyEnd, body, err
+			}
+		}
+	} else {
+		// For larger bodies, use bytes.Index which is optimized for larger searches
+		if idx := bytes.Index(bodyData, lastChunk); idx != -1 {
+			bodyEnd := bodyOffset + idx + 5
+			if dataLen < bodyEnd {
+				return 0, nil, ErrIncompleteBody
+			}
+
+			// Try the optimized chunked body parser first
+			chunkedBody, err := parseChunkedBody(data[bodyOffset : bodyEnd-5])
+			if err == nil {
+				return bodyEnd, chunkedBody, nil
+			}
+
+			// Fallback to standard library for complex cases
+			body, err := parseChunkedBodyFallback(data[:bodyEnd])
+			return bodyEnd, body, err
+		}
 	}
 
-	// Fallback check for requests without a body using bytes.Index
-	// This is slower but more thorough
-	if idx := bytes.Index(data, crlf); idx != -1 {
-		return idx + 4, nil, nil
+	// Fallback check for requests without a body
+	// First try a direct search for double CRLF which is faster for small data
+	if dataLen < 256 {
+		for i := 0; i <= dataLen-4; i++ {
+			if data[i] == '\r' && data[i+1] == '\n' &&
+				data[i+2] == '\r' && data[i+3] == '\n' {
+				return i + 4, nil, nil
+			}
+		}
+	} else {
+		// For larger data, use bytes.Index
+		if idx := bytes.Index(data, doubleCRLF); idx != -1 {
+			return idx + 4, nil, nil
+		}
 	}
 
 	return 0, nil, errors.New("invalid http request")
@@ -300,18 +329,18 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 		}
 	}
 
-	// Estimate the result size to avoid reallocations
-	// Most chunked bodies are smaller than the original data
-	resultCap := len(data) / 2
-	if resultCap < 1024 {
-		resultCap = 1024 // Minimum capacity of 1KB
-	}
-	result := make([]byte, 0, resultCap)
+	// First pass: calculate total size of all chunks to avoid reallocations
+	totalSize := 0
+	var chunkSizes []int   // Store chunk sizes to avoid recalculating
+	var chunkOffsets []int // Store chunk offsets to avoid recalculating
+
+	// Pre-allocate for common case (usually less than 8 chunks)
+	chunkSizes = make([]int, 0, 8)
+	chunkOffsets = make([]int, 0, 8)
 
 	var i int
 	for i < len(data) {
 		// Fast path for common chunk sizes (0-9) with direct character checks
-		// This avoids the expensive bytes.IndexByte call for simple cases
 		if i+2 < len(data) && data[i] >= '0' && data[i] <= '9' &&
 			data[i+1] == '\r' && data[i+2] == '\n' {
 			size := int(data[i] - '0')
@@ -327,8 +356,10 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 				return nil, ErrInvalidChunk
 			}
 
-			// Append the chunk data to the result
-			result = append(result, data[i:i+size]...)
+			// Store chunk info
+			chunkSizes = append(chunkSizes, size)
+			chunkOffsets = append(chunkOffsets, i)
+			totalSize += size
 
 			// Move past the chunk data and the trailing CRLF
 			i += size
@@ -352,8 +383,10 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 				return nil, ErrInvalidChunk
 			}
 
-			// Append the chunk data to the result
-			result = append(result, data[i:i+size]...)
+			// Store chunk info
+			chunkSizes = append(chunkSizes, size)
+			chunkOffsets = append(chunkOffsets, i)
+			totalSize += size
 
 			// Move past the chunk data and the trailing CRLF
 			i += size
@@ -404,14 +437,10 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 			return nil, ErrInvalidChunk
 		}
 
-		// Append the chunk data to the result
-		// Pre-grow the result slice if needed to avoid multiple small allocations
-		if cap(result)-len(result) < int(size) {
-			newResult := make([]byte, len(result), len(result)+int(size)+1024)
-			copy(newResult, result)
-			result = newResult
-		}
-		result = append(result, data[i:i+int(size)]...)
+		// Store chunk info
+		chunkSizes = append(chunkSizes, int(size))
+		chunkOffsets = append(chunkOffsets, i)
+		totalSize += int(size)
 
 		// Move past the chunk data and the trailing CRLF
 		i += int(size)
@@ -420,6 +449,23 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 		} else {
 			return nil, ErrInvalidChunk
 		}
+	}
+
+	// If we have only one chunk, return a slice of the original data to avoid allocation
+	if len(chunkSizes) == 1 {
+		offset := chunkOffsets[0]
+		size := chunkSizes[0]
+		return data[offset : offset+size], nil
+	}
+
+	// Allocate result buffer with exact size needed
+	result := make([]byte, 0, totalSize)
+
+	// Second pass: copy chunks to result buffer
+	for i := 0; i < len(chunkSizes); i++ {
+		offset := chunkOffsets[i]
+		size := chunkSizes[i]
+		result = append(result, data[offset:offset+size]...)
 	}
 
 	return result, nil
@@ -432,7 +478,7 @@ func parseChunkedBodyFallback(data []byte) ([]byte, error) {
 	defer ReleaseReader(reader)
 
 	// Get a bytes reader from the pool
-	bytesReader := bytesReaderPool.Get().(*bytes.Reader)
+	bytesReader := bytesReaderPool.Get()
 	bytesReader.Reset(data)
 	defer bytesReaderPool.Put(bytesReader)
 
@@ -470,7 +516,7 @@ func (hc *Codec) GetContentLength() int {
 	}
 
 	// Use pre-allocated byte slice for header name to avoid allocations
-	val := hc.Parser.FindHeader(contentLengthBytes)
+	val := hc.Parser.FindHeader([]byte("Content-Length"))
 	if val == nil {
 		hc.ContentLength = -1 // Cache the result
 		return -1             // No Content-Length header
@@ -516,7 +562,7 @@ func (hc *Codec) ResetParser() {
 	if hc.Parser != nil {
 		parserPool.Put(hc.Parser)
 	}
-	hc.Parser = parserPool.Get().(*wildcat.HTTPParser)
+	hc.Parser = parserPool.Get()
 }
 
 // Reset resets the HTTP codec.
@@ -525,29 +571,26 @@ func (hc *Codec) Reset() {
 	hc.ResetParser()
 
 	// Clear the buffer
-	hc.Buf = hc.Buf[:0]
+	if hc.Buf != nil {
+		hc.Buf.Reset()
+		ResponseBufferPool.Put(hc.Buf)
+		hc.Buf = nil
+	}
 
 	// Ensure we have a valid parser
 	if hc.Parser == nil {
-		hc.Parser = parserPool.Get().(*wildcat.HTTPParser)
+		hc.Parser = parserPool.Get()
 	}
 }
 
-// ResponseBufferPool is a pool of byte slices for response buffers.
-var ResponseBufferPool = sync.Pool{
-	New: func() interface{} {
-		// Start with a larger buffer to reduce reallocations
-		return make([]byte, 0, 16384) // Increased to 16KB for better performance
-	},
-}
+// ResponseBufferPool is a pool of byte buffers for response buffers.
+// Using valyala's bytebufferpool for better performance
+var ResponseBufferPool bytebufferpool.Pool
 
 // Common header constants to avoid allocations
 var (
 	// contentLengthPrefix is the prefix for the Content-Length header
 	contentLengthPrefix = []byte("Content-Length: ")
-
-	// contentLengthBytes is the byte representation of "Content-Length" header name
-	contentLengthBytes = []byte("Content-Length")
 
 	// httpVersion is the HTTP version string
 	httpVersion = []byte("HTTP/1.1 ")
@@ -557,9 +600,6 @@ var (
 
 	// crlfBytes is the CRLF byte sequence
 	crlfBytes = []byte("\r\n")
-
-	// doubleCrlfBytes is the double CRLF byte sequence that ends headers
-	doubleCrlfBytes = []byte("\r\n\r\n")
 
 	// colonSpace is the colon+space sequence used in headers
 	colonSpace = []byte(": ")
@@ -617,181 +657,91 @@ func getDateHeader() []byte {
 
 // WriteResponse writes an HTTP response to the codec's buffer.
 func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
-	// Get a more accurate estimate of the response size
-	estimatedSize := EstimateResponseSize(statusCode, header, body)
-
-	// Get buffer from pool if needed - optimized buffer management
-	var buf []byte
-	if cap(hc.Buf) < estimatedSize {
-		// Return current buffer to pool if it exists and is worth pooling
-		if cap(hc.Buf) > 0 && cap(hc.Buf) <= 64*1024 { // Increased threshold to 64KB
-			ResponseBufferPool.Put(hc.Buf[:0])
-		}
-
+	// If we don't have a buffer or it's too small, get a new one
+	if hc.Buf == nil {
 		// Get a buffer from the pool
-		poolBuf := ResponseBufferPool.Get().([]byte)
-		if cap(poolBuf) < estimatedSize {
-			// If the pool buffer is too small, create a new one with more capacity
-			// Add extra capacity to reduce future reallocations
-			newCap := estimatedSize + (estimatedSize / 4) // Add 25% extra capacity
-			ResponseBufferPool.Put(poolBuf[:0])
-			buf = make([]byte, 0, newCap)
-		} else {
-			buf = poolBuf[:0]
-		}
+		hc.Buf = ResponseBufferPool.Get()
 	} else {
-		// Reuse existing buffer
-		buf = hc.Buf[:0]
+		// Reset the existing buffer
+		hc.Buf.Reset()
 	}
 
+	// ByteBuffer will automatically grow as needed
+
 	// Write HTTP response - use pre-computed byte slices for common parts
-	buf = append(buf, httpVersion...)
+	hc.Buf.Write(httpVersion)
 
 	// Use pre-computed status code bytes if available
 	if codeBytes, ok := statusCodeBytes[statusCode]; ok {
-		buf = append(buf, codeBytes...)
+		hc.Buf.Write(codeBytes)
 	} else {
-		buf = strconv.AppendInt(buf, int64(statusCode), 10)
+		hc.Buf.B = strconv.AppendInt(hc.Buf.B, int64(statusCode), 10)
 	}
 
-	buf = append(buf, ' ')
-	buf = append(buf, StatusText(statusCode)...)
-	buf = append(buf, crlfBytes...)
+	hc.Buf.WriteByte(' ')
+	hc.Buf.WriteString(StatusText(statusCode))
+	hc.Buf.Write(crlfBytes)
 
 	// Add Date header - use cached version to avoid expensive time formatting
-	buf = append(buf, getDateHeader()...)
+	hc.Buf.Write(getDateHeader())
 
-	// Fast path for empty headers (common case)
-	if len(header) == 0 {
-		// Add Content-Length header
-		buf = append(buf, contentLengthPrefix...)
-		buf = strconv.AppendInt(buf, int64(len(body)), 10)
-		buf = append(buf, doubleCrlfBytes...)
-
-		// Add body
-		if len(body) > 0 {
-			buf = append(buf, body...)
-		}
-
-		// Store the buffer for writing
-		hc.Buf = buf
-		return
-	}
-
-	// Add custom headers - optimize for common cases
-	if len(header) <= 8 { // Increased threshold for small maps
-		// Direct iteration for small maps is faster than range
-		for k, values := range header {
-			if len(values) == 1 { // Most common case: single value per header
-				// Pre-calculate the total size needed for this header
-				headerSize := len(k) + len(colonSpace) + len(values[0]) + len(crlfBytes)
-
-				// Ensure we have enough capacity to avoid reallocation
-				if cap(buf)-len(buf) < headerSize {
-					// Grow the buffer with extra capacity
-					newCap := cap(buf) * 2
-					if newCap < len(buf)+headerSize {
-						newCap = len(buf) + headerSize + 256 // Add extra space
-					}
-					newBuf := make([]byte, len(buf), newCap)
-					copy(newBuf, buf)
-					buf = newBuf
-				}
-
-				// Append all at once
-				buf = append(buf, k...)
-				buf = append(buf, colonSpace...)
-				buf = append(buf, values[0]...)
-				buf = append(buf, crlfBytes...)
-			} else {
-				for _, v := range values {
-					// Pre-calculate the total size needed for this header
-					headerSize := len(k) + len(colonSpace) + len(v) + len(crlfBytes)
-
-					// Ensure we have enough capacity to avoid reallocation
-					if cap(buf)-len(buf) < headerSize {
-						// Grow the buffer with extra capacity
-						newCap := cap(buf) * 2
-						if newCap < len(buf)+headerSize {
-							newCap = len(buf) + headerSize + 256 // Add extra space
-						}
-						newBuf := make([]byte, len(buf), newCap)
-						copy(newBuf, buf)
-						buf = newBuf
-					}
-
-					// Append all at once
-					buf = append(buf, k...)
-					buf = append(buf, colonSpace...)
-					buf = append(buf, v...)
-					buf = append(buf, crlfBytes...)
-				}
-			}
-		}
-	} else {
-		// Standard path for many headers
-		// Pre-allocate space for headers to avoid reallocations
-		headerSpace := len(header) * 64 // Estimate 64 bytes per header on average
-		if cap(buf)-len(buf) < headerSpace {
-			// Grow the buffer with extra capacity
-			newCap := len(buf) + headerSpace + 256 // Add extra space
-			newBuf := make([]byte, len(buf), newCap)
-			copy(newBuf, buf)
-			buf = newBuf
-		}
-
-		for k, values := range header {
+	// Add custom headers
+	for k, values := range header {
+		if len(values) == 1 { // Most common case: single value per header
+			hc.Buf.WriteString(k)
+			hc.Buf.Write(colonSpace)
+			hc.Buf.WriteString(values[0])
+			hc.Buf.Write(crlfBytes)
+		} else {
 			for _, v := range values {
-				buf = append(buf, k...)
-				buf = append(buf, colonSpace...)
-				buf = append(buf, v...)
-				buf = append(buf, crlfBytes...)
+				hc.Buf.WriteString(k)
+				hc.Buf.Write(colonSpace)
+				hc.Buf.WriteString(v)
+				hc.Buf.Write(crlfBytes)
 			}
 		}
 	}
 
 	// Add Content-Length header
-	buf = append(buf, contentLengthPrefix...)
-	buf = strconv.AppendInt(buf, int64(len(body)), 10)
-	buf = append(buf, doubleCrlfBytes...)
+	hc.Buf.Write(contentLengthPrefix)
+	hc.Buf.B = strconv.AppendInt(hc.Buf.B, int64(len(body)), 10)
+	hc.Buf.Write(crlfBytes)
+
+	// Add an additional CRLF to separate headers from body
+	hc.Buf.Write(crlfBytes)
 
 	// Add body
 	if len(body) > 0 {
-		buf = append(buf, body...)
+		hc.Buf.Write(body)
 	}
-
-	// Store the buffer for writing
-	hc.Buf = buf
 }
 
 // codecPool is a pool of Codec objects for reuse
-var codecPool = sync.Pool{
-	New: func() interface{} {
-		return &Codec{
-			Parser:        parserPool.Get().(*wildcat.HTTPParser),
-			ContentLength: -1,
-		}
-	},
-}
+var codecPool = pool.New(func() *Codec {
+	return &Codec{
+		Parser:        parserPool.Get(),
+		ContentLength: -1,
+	}
+})
 
 // NewCodec creates a new HTTP codec.
 func NewCodec(router interface{}) *Codec {
 	// Get a codec from the pool
-	codec := codecPool.Get().(*Codec)
+	codec := codecPool.Get()
 
 	// Reset content length
 	codec.ContentLength = -1
 
 	// Ensure we have a valid parser
 	if codec.Parser == nil {
-		codec.Parser = parserPool.Get().(*wildcat.HTTPParser)
+		codec.Parser = parserPool.Get()
 	}
 
 	// Set the router
 	codec.Router = router
 
-	// Clear the buffer
-	codec.Buf = codec.Buf[:0]
+	// Get a new buffer from the pool
+	codec.Buf = ResponseBufferPool.Get()
 
 	return codec
 }

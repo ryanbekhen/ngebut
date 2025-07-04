@@ -6,6 +6,55 @@ import (
 	"sync"
 )
 
+// PathMatchContext is a reusable context for path matching operations
+// It pre-allocates memory for common operations to reduce allocations
+type PathMatchContext struct {
+	// Segments for path matching
+	segments []string
+
+	// Temporary byte slice for path operations
+	pathBytes []byte
+
+	// Reusable parameter map
+	params map[string]string
+}
+
+// Reset resets the context for reuse
+func (c *PathMatchContext) Reset() {
+	// Clear segments without deallocating
+	c.segments = c.segments[:0]
+
+	// Clear pathBytes without deallocating
+	c.pathBytes = c.pathBytes[:0]
+
+	// Clear params without deallocating
+	for k := range c.params {
+		delete(c.params, k)
+	}
+}
+
+// pathMatchContextPool is a pool of PathMatchContext objects
+var pathMatchContextPool = sync.Pool{
+	New: func() interface{} {
+		return &PathMatchContext{
+			segments:  make([]string, 0, 16),      // Pre-allocate for common path depth
+			pathBytes: make([]byte, 0, 128),       // Pre-allocate for common path length
+			params:    make(map[string]string, 8), // Pre-allocate for common number of params
+		}
+	},
+}
+
+// getPathMatchContext gets a PathMatchContext from the pool
+func getPathMatchContext() *PathMatchContext {
+	return pathMatchContextPool.Get().(*PathMatchContext)
+}
+
+// releasePathMatchContext returns a PathMatchContext to the pool
+func releasePathMatchContext(ctx *PathMatchContext) {
+	ctx.Reset()
+	pathMatchContextPool.Put(ctx)
+}
+
 // segmentsPool is a pool of string slices for reuse when splitting paths
 var segmentsPool = sync.Pool{
 	New: func() interface{} {
@@ -171,6 +220,86 @@ func (t *Tree) Find(path string, params map[string]string) (map[string]interface
 	return result, found
 }
 
+// FindBytesWithContext searches for a route in the radix tree using a byte slice path and a pre-allocated context
+// This is the most optimized version that avoids all allocations
+func (t *Tree) FindBytesWithContext(path []byte, ctx *PathMatchContext) (map[string]interface{}, bool) {
+	if len(path) == 0 {
+		return nil, false
+	}
+
+	// Use the pre-allocated segments slice
+	segments := ctx.segments
+
+	// Handle path directly as bytes to avoid string conversion
+	if path[0] != '/' {
+		// For paths without leading slash, add an empty segment at the beginning
+		segments = append(segments, "")
+
+		// Split the path manually to avoid allocations
+		start := 0
+		for i := 0; i < len(path); i++ {
+			if path[i] == '/' {
+				// Add segment to the slice using unsafe for zero-allocation conversion
+				if i > start {
+					segments = append(segments, unsafe.B2S(path[start:i]))
+				} else {
+					segments = append(segments, "")
+				}
+				start = i + 1
+			}
+		}
+
+		// Add the last segment
+		if start < len(path) {
+			segments = append(segments, unsafe.B2S(path[start:]))
+		} else if start == len(path) {
+			segments = append(segments, "")
+		}
+	} else {
+		// Path already has leading slash, use normal splitPath logic but inline it
+		// to avoid an extra function call and string conversion
+
+		// Remove trailing slash if present
+		pathLen := len(path)
+		if pathLen > 1 && path[pathLen-1] == '/' {
+			pathLen--
+			path = path[:pathLen]
+		}
+
+		// Split the path manually to avoid allocations
+		start := 1 // Start after the leading slash
+		for i := 1; i < pathLen; i++ {
+			if path[i] == '/' {
+				// Add segment to the slice using unsafe for zero-allocation conversion
+				if i > start {
+					segments = append(segments, unsafe.B2S(path[start:i]))
+				} else {
+					segments = append(segments, "")
+				}
+				start = i + 1
+			}
+		}
+
+		// Add the last segment
+		if start < pathLen {
+			segments = append(segments, unsafe.B2S(path[start:pathLen]))
+		} else if start == pathLen {
+			segments = append(segments, "")
+		}
+	}
+
+	// Update the context's segments
+	ctx.segments = segments
+
+	// Start at the root node
+	current := t.Root
+
+	// Traverse the tree to find the matching node
+	result, found := findNode(current, segments, 0, ctx.params)
+
+	return result, found
+}
+
 // FindBytes searches for a route in the radix tree using a byte slice path
 // This avoids string conversion when processing HTTP requests
 func (t *Tree) FindBytes(path []byte, params map[string]string) (map[string]interface{}, bool) {
@@ -178,27 +307,79 @@ func (t *Tree) FindBytes(path []byte, params map[string]string) (map[string]inte
 		return nil, false
 	}
 
-	// Ensure path starts with /
-	var pathStr string
+	// Get a path match context from the pool
+	ctx := getPathMatchContext()
+	defer releasePathMatchContext(ctx)
+
+	// Use the pre-allocated segments slice
+	segments := ctx.segments
+
+	// Handle path directly as bytes to avoid string conversion
 	if path[0] != '/' {
-		// Need to add a leading slash, so we can't use zero-alloc conversion directly
-		pathStr = "/" + unsafe.B2S(path)
+		// For paths without leading slash, add an empty segment at the beginning
+		segments = append(segments, "")
+
+		// Split the path manually to avoid allocations
+		start := 0
+		for i := 0; i < len(path); i++ {
+			if path[i] == '/' {
+				// Add segment to the slice using unsafe for zero-allocation conversion
+				if i > start {
+					segments = append(segments, unsafe.B2S(path[start:i]))
+				} else {
+					segments = append(segments, "")
+				}
+				start = i + 1
+			}
+		}
+
+		// Add the last segment
+		if start < len(path) {
+			segments = append(segments, unsafe.B2S(path[start:]))
+		} else if start == len(path) {
+			segments = append(segments, "")
+		}
 	} else {
-		// Zero-allocation conversion from []byte to string
-		pathStr = unsafe.B2S(path)
+		// Path already has leading slash, use normal splitPath logic but inline it
+		// to avoid an extra function call and string conversion
+
+		// Remove trailing slash if present
+		pathLen := len(path)
+		if pathLen > 1 && path[pathLen-1] == '/' {
+			pathLen--
+			path = path[:pathLen]
+		}
+
+		// Split the path manually to avoid allocations
+		start := 1 // Start after the leading slash
+		for i := 1; i < pathLen; i++ {
+			if path[i] == '/' {
+				// Add segment to the slice using unsafe for zero-allocation conversion
+				if i > start {
+					segments = append(segments, unsafe.B2S(path[start:i]))
+				} else {
+					segments = append(segments, "")
+				}
+				start = i + 1
+			}
+		}
+
+		// Add the last segment
+		if start < pathLen {
+			segments = append(segments, unsafe.B2S(path[start:pathLen]))
+		} else if start == pathLen {
+			segments = append(segments, "")
+		}
 	}
 
-	// Split the path into segments
-	segments := splitPath(pathStr)
+	// Update the context's segments
+	ctx.segments = segments
 
 	// Start at the root node
 	current := t.Root
 
 	// Traverse the tree to find the matching node
 	result, found := findNode(current, segments, 0, params)
-
-	// Release the segments slice back to the pool
-	releaseSegments(segments)
 
 	return result, found
 }
@@ -237,27 +418,79 @@ func (t *Tree) FindStaticBytes(path []byte) (map[string]interface{}, bool) {
 		return nil, false
 	}
 
-	// Ensure path starts with /
-	var pathStr string
+	// Get a path match context from the pool
+	ctx := getPathMatchContext()
+	defer releasePathMatchContext(ctx)
+
+	// Use the pre-allocated segments slice
+	segments := ctx.segments
+
+	// Handle path directly as bytes to avoid string conversion
 	if path[0] != '/' {
-		// Need to add a leading slash, so we can't use zero-alloc conversion directly
-		pathStr = "/" + unsafe.B2S(path)
+		// For paths without leading slash, add an empty segment at the beginning
+		segments = append(segments, "")
+
+		// Split the path manually to avoid allocations
+		start := 0
+		for i := 0; i < len(path); i++ {
+			if path[i] == '/' {
+				// Add segment to the slice using unsafe for zero-allocation conversion
+				if i > start {
+					segments = append(segments, unsafe.B2S(path[start:i]))
+				} else {
+					segments = append(segments, "")
+				}
+				start = i + 1
+			}
+		}
+
+		// Add the last segment
+		if start < len(path) {
+			segments = append(segments, unsafe.B2S(path[start:]))
+		} else if start == len(path) {
+			segments = append(segments, "")
+		}
 	} else {
-		// Zero-allocation conversion from []byte to string
-		pathStr = unsafe.B2S(path)
+		// Path already has leading slash, use normal splitPath logic but inline it
+		// to avoid an extra function call and string conversion
+
+		// Remove trailing slash if present
+		pathLen := len(path)
+		if pathLen > 1 && path[pathLen-1] == '/' {
+			pathLen--
+			path = path[:pathLen]
+		}
+
+		// Split the path manually to avoid allocations
+		start := 1 // Start after the leading slash
+		for i := 1; i < pathLen; i++ {
+			if path[i] == '/' {
+				// Add segment to the slice using unsafe for zero-allocation conversion
+				if i > start {
+					segments = append(segments, unsafe.B2S(path[start:i]))
+				} else {
+					segments = append(segments, "")
+				}
+				start = i + 1
+			}
+		}
+
+		// Add the last segment
+		if start < pathLen {
+			segments = append(segments, unsafe.B2S(path[start:pathLen]))
+		} else if start == pathLen {
+			segments = append(segments, "")
+		}
 	}
 
-	// Split the path into segments
-	segments := splitPath(pathStr)
+	// Update the context's segments
+	ctx.segments = segments
 
 	// Start at the root node
 	current := t.Root
 
 	// Traverse the tree to find the matching node
 	result, found := findStaticNode(current, segments, 0)
-
-	// Release the segments slice back to the pool
-	releaseSegments(segments)
 
 	return result, found
 }
@@ -316,8 +549,10 @@ func findNode(node *Node, segments []string, index int, params map[string]string
 			}
 		case Param:
 			// Parameter nodes match any segment
-			// Store the parameter value
+			// Store the parameter value using unsafe conversion if possible
 			if params != nil {
+				// Use direct string assignment since segment is already a string
+				// The compiler should optimize this
 				params[child.ParamName] = segment
 			}
 			return findNode(child, segments, index+1, params)

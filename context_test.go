@@ -483,8 +483,9 @@ func TestString(t *testing.T) {
 	assert.Equal(t, MIMETextPlainCharsetUTF8, ctx.Get(HeaderContentType), "String should set the Content-Type header")
 }
 
-// TestJSON tests the JSON method
-func TestJSON(t *testing.T) {
+// TestJSONBasic tests the basic functionality of the JSON method
+// More comprehensive tests are in context_json_test.go
+func TestJSONBasic(t *testing.T) {
 	// Create a context
 	req, _ := http.NewRequest(MethodGet, "/test", nil)
 	res := httptest.NewRecorder()

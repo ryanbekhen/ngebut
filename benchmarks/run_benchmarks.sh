@@ -6,7 +6,7 @@
 # Configuration
 DURATION=10s  # Duration for each benchmark
 THREADS=4     # Number of threads
-CONNECTIONS=100  # Number of connections
+CONNECTIONS=(100 500 1000)  # Number of connections to test
 PORT=3000     # Port for all servers
 ENDPOINTS=("/" "/json" "/users/123")  # Endpoints to test
 FRAMEWORKS=("ngebut" "gofiber" "nethttp")  # Frameworks to test
@@ -30,11 +30,12 @@ fi
 run_benchmark() {
     local framework=$1
     local endpoint=$2
+    local connections=$3
     local url="http://localhost:$PORT$endpoint"
-    local result_file="$TEMP_DIR/${framework}_${endpoint//\//_}.txt"
+    local result_file="$TEMP_DIR/${framework}_${endpoint//\//_}_${connections}conn.txt"
 
-    echo "Running benchmark for $framework - $endpoint"
-    wrk -t$THREADS -c$CONNECTIONS -d$DURATION $url > "$result_file"
+    echo "Running benchmark for $framework - $endpoint with $connections connections"
+    wrk -t$THREADS -c$connections -d$DURATION $url > "$result_file"
     echo ""
 }
 
@@ -114,9 +115,18 @@ for framework in "${FRAMEWORKS[@]}"; do
 
     # Start the server
     if start_server $framework; then
-        # Run benchmarks for each endpoint
-        for endpoint in "${ENDPOINTS[@]}"; do
-            run_benchmark $framework $endpoint
+        # Run benchmarks for each connection count
+        for conn in "${CONNECTIONS[@]}"; do
+            echo "Testing with $conn connections"
+            echo "----------------------------------------------------"
+
+            # Run benchmarks for each endpoint
+            for endpoint in "${ENDPOINTS[@]}"; do
+                run_benchmark $framework $endpoint $conn
+            done
+
+            echo "----------------------------------------------------"
+            echo ""
         done
 
         # Stop the server
@@ -133,7 +143,8 @@ done
 echo "====================================================="
 echo "BENCHMARK SUMMARY"
 echo "====================================================="
-echo "Configuration: $THREADS threads, $CONNECTIONS connections, $DURATION duration"
+echo "Configuration: $THREADS threads, $DURATION duration"
+echo "Tested with connection counts: ${CONNECTIONS[*]}"
 echo ""
 
 # Function to extract requests per second from wrk output
@@ -146,21 +157,30 @@ extract_latency() {
     grep "Latency" "$1" | awk '{print $2}'
 }
 
-# Display results in a table format
-printf "%-10s %-15s %-20s %-20s\n" "Framework" "Endpoint" "Requests/sec" "Avg Latency"
-echo "----------------------------------------------------------------------"
+# Display results for each connection count
+for conn in "${CONNECTIONS[@]}"; do
+    echo "====================================================="
+    echo "Results with $conn connections"
+    echo "====================================================="
 
-for framework in "${FRAMEWORKS[@]}"; do
-    for endpoint in "${ENDPOINTS[@]}"; do
-        result_file="$TEMP_DIR/${framework}_${endpoint//\//_}.txt"
-        if [ -f "$result_file" ]; then
-            rps=$(extract_rps "$result_file")
-            latency=$(extract_latency "$result_file")
-            printf "%-10s %-15s %-20s %-20s\n" "$framework" "$endpoint" "$rps" "$latency"
-        else
-            printf "%-10s %-15s %-20s %-20s\n" "$framework" "$endpoint" "N/A" "N/A"
-        fi
+    # Display results in a table format
+    printf "%-10s %-15s %-20s %-20s\n" "Framework" "Endpoint" "Requests/sec" "Avg Latency"
+    echo "----------------------------------------------------------------------"
+
+    for framework in "${FRAMEWORKS[@]}"; do
+        for endpoint in "${ENDPOINTS[@]}"; do
+            result_file="$TEMP_DIR/${framework}_${endpoint//\//_}_${conn}conn.txt"
+            if [ -f "$result_file" ]; then
+                rps=$(extract_rps "$result_file")
+                latency=$(extract_latency "$result_file")
+                printf "%-10s %-15s %-20s %-20s\n" "$framework" "$endpoint" "$rps" "$latency"
+            else
+                printf "%-10s %-15s %-20s %-20s\n" "$framework" "$endpoint" "N/A" "N/A"
+            fi
+        done
     done
+
+    echo ""
 done
 
 echo ""

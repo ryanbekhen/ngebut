@@ -162,21 +162,14 @@ func getRequest(r *http.Request) *Request {
 	req.Proto = r.Proto
 
 	// Handle headers more efficiently
-	if len(r.Header) == 0 {
-		// If there are no headers, just clear the existing header map
-		if req.Header != nil {
-			for k := range *req.Header {
-				delete(*req.Header, k)
-			}
-		}
-	} else {
-		// If there are headers, use NewHeaderFromMap which is optimized
-		// Release the old header if it exists
-		if req.Header != nil {
-			releaseHeader(req.Header)
-		}
-		req.Header = NewHeaderFromMap(r.Header)
+	if req.Header == nil {
+		// If the request doesn't have a header map, create a new one
+		req.Header = NewHeader()
 	}
+
+	// Update the existing header map with values from the request
+	// This avoids allocating a new map
+	UpdateHeaderFromMap(req.Header, r.Header)
 
 	req.Body = body
 	req.ContentLength = r.ContentLength
@@ -258,7 +251,7 @@ func (hs *httpServer) OnTraffic(c gnet.Conn) gnet.Action {
 				defer releaseParserHeaders(parserHeaders)
 				errorMsg := []byte("Bad Request: Form data could not be processed. Please check your form submission.")
 				hc.WriteResponse(StatusBadRequest, parserHeaders, errorMsg)
-				c.Write(hc.Buf)
+				c.Write(hc.Buf.B)
 			}
 
 			// Discard at least 1 byte to avoid getting stuck in a loop
@@ -318,8 +311,8 @@ func (hs *httpServer) OnTraffic(c gnet.Conn) gnet.Action {
 	}
 
 	// Write the response if there's data in the buffer
-	if len(hc.Buf) > 0 {
-		c.Write(hc.Buf)
+	if hc.Buf != nil && hc.Buf.Len() > 0 {
+		c.Write(hc.Buf.B)
 	}
 
 	// Reset the codec for the next request

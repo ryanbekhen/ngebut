@@ -1,10 +1,13 @@
 package ngebut
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/goccy/go-json"
+	"github.com/ryanbekhen/ngebut/internal/pool"
+	"github.com/ryanbekhen/ngebut/internal/unsafe"
+	"github.com/valyala/bytebufferpool"
+	"github.com/valyala/fastjson"
 	"net"
 	"net/http"
 	"strconv"
@@ -40,54 +43,52 @@ type Ctx struct {
 // and is used as a key for storing parameters in the request context
 
 // contextPool is a pool of Ctx objects for reuse
-var contextPool = sync.Pool{
-	New: func() interface{} {
-		return &Ctx{
-			statusCode:      StatusOK,
-			err:             nil,
-			middlewareStack: make([]MiddlewareFunc, 0, 4), // Pre-allocate capacity for common middleware count
-			fixedCount:      0,                            // No middleware in fixed buffer initially
-			middlewareIndex: -1,
-			paramCache:      cachedParamMap{valid: false, params: nil, routeParams: nil, fixedParams: nil},
-			queryCache:      cachedQueryMap{valid: false, values: nil},
-			userData:        make(map[string]interface{}, 4), // Pre-allocate userData map with increased capacity
-		}
-	},
-}
+var contextPool = pool.New(func() *Ctx {
+	return &Ctx{
+		statusCode:      StatusOK,
+		err:             nil,
+		middlewareStack: make([]MiddlewareFunc, 0, 4), // Pre-allocate capacity for common middleware count
+		fixedCount:      0,                            // No middleware in fixed buffer initially
+		middlewareIndex: -1,
+		paramCache:      cachedParamMap{valid: false, params: nil, routeParams: nil, fixedParams: nil},
+		queryCache:      cachedQueryMap{valid: false, values: nil},
+		userData:        make(map[string]interface{}, 4), // Pre-allocate userData map with increased capacity
+	}
+})
 
-// bufferPool is a pool of bytes.Buffer objects for reuse
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 8192)) // Increased capacity to 8KB to reduce reallocations
-	},
-}
+// bufferPool is a pool of byte buffers for reuse
+var bufferPool bytebufferpool.Pool
 
-// jsonBufferPool is a dedicated pool of bytes.Buffer objects for JSON serialization
+// jsonBufferPool is a dedicated pool of byte buffers for JSON serialization
 // Using a separate pool for JSON allows us to optimize buffer sizes for JSON specifically
-var jsonBufferPool = sync.Pool{
-	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 32768)) // 32KB capacity for large JSON responses
-	},
+var jsonBufferPool bytebufferpool.Pool
+
+// fastjsonParserPool is a pool of fastjson parsers for reuse
+var fastjsonParserPool = pool.New(func() *fastjson.Parser {
+	return &fastjson.Parser{}
+})
+
+// jsonEncoder is a wrapper around json.Encoder that can be reused with different writers
+type jsonEncoder struct {
+	encoder *json.Encoder
+	writer  *bytebufferpool.ByteBuffer
 }
 
-// jsonEncoderPool is a pool of JSON encoders to avoid creating new ones
-// This is not used directly as encoders can't be reset with a new writer
-// Instead, we use the bufPool below and create a new encoder for each use
-var jsonEncoderPool = sync.Pool{
-	New: func() interface{} {
-		// Create a buffer with a small initial capacity
-		// The actual buffer will be replaced when the encoder is used
-		buf := bytes.NewBuffer(make([]byte, 0, 512))
-		return json.NewEncoder(buf)
-	},
+// Encode encodes the value to the writer
+func (e *jsonEncoder) Encode(v interface{}) error {
+	return e.encoder.Encode(v)
 }
 
-// bufPool is a pool of bytes.Buffer objects for reuse in JSON encoding
-var bufPool = sync.Pool{
-	New: func() any {
-		return new(bytes.Buffer)
-	},
+// SetWriter sets a new writer for the encoder
+func (e *jsonEncoder) SetWriter(w *bytebufferpool.ByteBuffer) {
+	e.writer = w
+	e.encoder = json.NewEncoder(w)
 }
+
+// jsonEncoderPool is a pool of JSON encoders for reuse
+var jsonEncoderPool = pool.New(func() *jsonEncoder {
+	return &jsonEncoder{}
+})
 
 // Pre-allocated error message for JSON encoding errors
 var jsonEncodingErr = errors.New("JSON encoding error")
@@ -224,10 +225,11 @@ func (c *Ctx) GetError() error {
 func (c *Ctx) Next() {
 	c.middlewareIndex++
 
-	// Fast path: use fixed-size buffer if available
+	// Ultra-fast path: use fixed-size buffer if available
 	if c.fixedCount > 0 {
 		// If we've gone through all middleware in the fixed buffer, call the final handler
 		if c.middlewareIndex >= c.fixedCount {
+			// We need to check if the handler is nil to avoid panics
 			if c.handler != nil {
 				c.handler(c)
 			}
@@ -235,13 +237,18 @@ func (c *Ctx) Next() {
 		}
 
 		// Call the next middleware from the fixed buffer
+		// This is the most common case, so we optimize it
 		c.fixedMiddleware[c.middlewareIndex](c)
 		return
 	}
 
 	// Legacy path: use dynamic middleware stack
-	// If we've gone through all middleware, call the final handler
-	if c.middlewareIndex >= len(c.middlewareStack) {
+	// This path is only used for backward compatibility
+	middlewareLen := len(c.middlewareStack)
+
+	// Fast check if we've gone through all middleware
+	if c.middlewareIndex >= middlewareLen {
+		// We need to check if the handler is nil to avoid panics
 		if c.handler != nil {
 			c.handler(c)
 		}
@@ -249,6 +256,7 @@ func (c *Ctx) Next() {
 	}
 
 	// Call the next middleware from the dynamic stack
+	// This is the slowest path, but it's rarely used
 	c.middlewareStack[c.middlewareIndex](c)
 }
 
@@ -262,7 +270,7 @@ func (c *Ctx) Next() {
 // Returns:
 //   - A properly initialized *Ctx object ready for request processing
 func GetContext(w http.ResponseWriter, r *http.Request) *Ctx {
-	ctx := contextPool.Get().(*Ctx)
+	ctx := contextPool.Get()
 	ctx.Writer = NewResponseWriter(w)
 	ctx.Request = NewRequest(r)
 	return ctx
@@ -279,7 +287,7 @@ func GetContext(w http.ResponseWriter, r *http.Request) *Ctx {
 // Returns:
 //   - A properly initialized *Ctx object ready for request processing
 func getContextFromRequest(w http.ResponseWriter, r *Request) *Ctx {
-	ctx := contextPool.Get().(*Ctx)
+	ctx := contextPool.Get()
 	ctx.Writer = NewResponseWriter(w)
 	ctx.Request = r
 
@@ -640,17 +648,54 @@ func (c *Ctx) Param(key string) string {
 		return ""
 	}
 
-	// Fastest path: Use cached fixedParams if available (new optimized path with fixed-size arrays)
-	if c.paramCache.valid && c.paramCache.fixedParams != nil {
-		if value, found := c.paramCache.fixedParams.Get(key); found {
-			return value
+	// Ultra-fast path: Use cached routeParams with fixed arrays if available
+	// This is now the most optimized path with zero allocations
+	if c.paramCache.valid && c.paramCache.routeParams != nil {
+		// Inline the most common case for better performance
+		rp := c.paramCache.routeParams
+
+		// Compute hash code once for faster comparisons
+		hash := stringHash(key)
+
+		// Fast path for fixed arrays (most common case)
+		// Manually unroll the loop for the first few elements to avoid loop overhead
+		if rp.count > 0 {
+			// Hash comparison is much faster than string comparison
+			if rp.fixedHashes[0] == hash && rp.fixedKeys[0] == key {
+				return rp.fixedValues[0]
+			}
+			if rp.count > 1 && rp.fixedHashes[1] == hash && rp.fixedKeys[1] == key {
+				return rp.fixedValues[1]
+			}
+			if rp.count > 2 && rp.fixedHashes[2] == hash && rp.fixedKeys[2] == key {
+				return rp.fixedValues[2]
+			}
+			if rp.count > 3 && rp.fixedHashes[3] == hash && rp.fixedKeys[3] == key {
+				return rp.fixedValues[3]
+			}
+			// For more than 4 parameters, use the loop with direct indexing
+			for i := 4; i < rp.count; i++ {
+				// Hash comparison is much faster than string comparison
+				if rp.fixedHashes[i] == hash && rp.fixedKeys[i] == key {
+					return rp.fixedValues[i]
+				}
+			}
+		}
+
+		// Check dynamic slices if fixed arrays didn't have the key
+		// Use direct indexing for better performance
+		for i := 0; i < len(rp.keys); i++ {
+			// Hash comparison is much faster than string comparison
+			if rp.hashes[i] == hash && rp.keys[i] == key {
+				return rp.values[i]
+			}
 		}
 		return ""
 	}
 
-	// Fast path: Use cached routeParams if available
-	if c.paramCache.valid && c.paramCache.routeParams != nil {
-		if value, found := c.paramCache.routeParams.Get(key); found {
+	// Fast path: Use cached fixedParams if available
+	if c.paramCache.valid && c.paramCache.fixedParams != nil {
+		if value, found := c.paramCache.fixedParams.Get(key); found {
 			return value
 		}
 		return ""
@@ -671,7 +716,7 @@ func (c *Ctx) Param(key string) string {
 		return ""
 	}
 
-	// Try the parameter slice first (fastest path)
+	// Try the parameter slice first (fastest legacy path)
 	if paramSlice, ok := ctxValue.(*paramSlice); ok && paramSlice != nil {
 		// Cache the parameter slice for future lookups
 		c.paramCache.params = paramSlice
@@ -686,43 +731,51 @@ func (c *Ctx) Param(key string) string {
 
 	// Try the map-based parameter context (legacy path)
 	if paramCtx, ok := ctxValue.(map[paramKey]string); ok && paramCtx != nil {
-		// Get a fixed-size params struct from the pool
-		params := getParams()
+		// Get a routeParams struct from the pool (optimized approach)
+		rp := getRouteParams()
 
 		// Use a cached key to avoid string allocations
 		paramKey := paramKey(key)
 
 		// Check if the key exists in the map directly
-		// This avoids converting the entire map if we just need one value
 		if value, exists := paramCtx[paramKey]; exists {
-			// Add this parameter to the fixed-size params
-			params.Set(key, value)
+			// Store in fixed array (zero allocation)
+			rp.fixedKeys[0] = key
+			rp.fixedValues[0] = value
+			rp.count = 1
 
-			// Cache the fixed-size params for future lookups
-			c.paramCache.fixedParams = params
+			// Cache for future lookups
+			c.paramCache.routeParams = rp
 			c.paramCache.valid = true
 
 			return value
 		}
 
-		// If the key wasn't found, add all parameters to the fixed-size params
-		// Use a type assertion instead of conversion to avoid string allocations
+		// If key wasn't found, convert all parameters to fixed arrays when possible
+		i := 0
 		for k, v := range paramCtx {
-			// Use the string representation of k directly without conversion
-			// This is safe because paramKey is just a type alias for string
-			params.Set(string(k), v)
+			if i < len(rp.fixedKeys) {
+				// Store in fixed array (zero allocation)
+				rp.fixedKeys[i] = string(k)
+				rp.fixedValues[i] = v
+				rp.count++
+			} else {
+				// Fall back to dynamic slices if we have too many parameters
+				rp.keys = append(rp.keys, string(k))
+				rp.values = append(rp.values, v)
+			}
+			i++
 		}
 
-		// Cache the fixed-size params for future lookups
-		c.paramCache.fixedParams = params
+		// Cache for future lookups
+		c.paramCache.routeParams = rp
 		c.paramCache.valid = true
 
-		// The key wasn't found in the direct lookup, so it doesn't exist
 		return ""
 	}
 
 	// Fall back to direct context lookup for backward compatibility
-	// Use a cached key to avoid string allocations
+	// Avoid allocation by not creating a new paramKey if possible
 	if value := c.Request.Context().Value(paramKey(key)); value != nil {
 		if strValue, ok := value.(string); ok {
 			return strValue
@@ -740,32 +793,42 @@ func (c *Ctx) ensureQueryCache() map[string][]string {
 	}
 
 	// Fast path: if there's no query string, return nil
+	// Use direct field access to avoid function call overhead
 	rawQuery := c.Request.URL.RawQuery
 	if rawQuery == "" {
 		return nil
 	}
 
-	// Use cached query values if available and valid
-	if c.queryCache.valid && c.queryCache.values != nil && c.queryCache.rawQuery == rawQuery {
-		return c.queryCache.values
+	// Ultra-fast path: if the query string hasn't changed and cache is valid, return it
+	// This is the most common case for multiple query parameter accesses in a single request
+	if c.queryCache.valid && c.queryCache.values != nil {
+		// Use direct string comparison for better performance
+		if c.queryCache.rawQuery == rawQuery {
+			return c.queryCache.values
+		}
 	}
 
-	// If the query cache map is nil, pre-allocate it
+	// If the query cache map is nil, pre-allocate it with a reasonable capacity
+	// Most query strings have fewer than 8 parameters
 	if c.queryCache.values == nil {
 		c.queryCache.values = make(map[string][]string, 8) // Pre-allocate with capacity for common query params
 	} else {
-		// Clear existing values
+		// Clear existing values without reallocating the map
+		// This is faster than creating a new map for each request
 		for k := range c.queryCache.values {
 			delete(c.queryCache.values, k)
 		}
 	}
 
 	// Store the raw query string for cache invalidation
+	// This allows us to quickly check if the query string has changed
 	c.queryCache.rawQuery = rawQuery
 
 	// Parse query parameters directly to avoid allocations from URL.Query()
+	// This is much faster than the standard library implementation
 	parseQueryString(rawQuery, c.queryCache.values)
 
+	// Mark the cache as valid to avoid reparsing
 	c.queryCache.valid = true
 	return c.queryCache.values
 }
@@ -778,6 +841,54 @@ func parseQueryString(query string, values map[string][]string) {
 		return
 	}
 
+	// Fast path for simple queries (most common case)
+	// If the query is simple (no special characters except & and =), we can use a faster approach
+	hasSpecialChars := false
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if c == '+' || c == '%' {
+			hasSpecialChars = true
+			break
+		}
+	}
+
+	// For simple queries, use a more optimized parsing approach
+	if !hasSpecialChars {
+		// Process the query string segment by segment
+		// This avoids unnecessary string slicing and function calls
+		start := 0
+		for i := 0; i <= len(query); i++ {
+			// Process at delimiter or end of string
+			if i == len(query) || query[i] == '&' {
+				if i > start {
+					segment := query[start:i]
+					// Find the equals sign
+					equalsPos := -1
+					for j := 0; j < len(segment); j++ {
+						if segment[j] == '=' {
+							equalsPos = j
+							break
+						}
+					}
+
+					// Handle key=value or just key
+					if equalsPos >= 0 {
+						key := segment[:equalsPos]
+						value := segment[equalsPos+1:]
+						// Direct map access is faster than function call
+						values[key] = append(values[key], value)
+					} else {
+						// Key with empty value
+						values[segment] = append(values[segment], "")
+					}
+				}
+				start = i + 1
+			}
+		}
+		return
+	}
+
+	// Fallback to the original implementation for complex queries with special characters
 	// Process the query string character by character
 	key := ""
 	value := ""
@@ -909,6 +1020,9 @@ func (c *Ctx) Query(key string) string {
 		return ""
 	}
 
+	// Skip the special case optimization for specific query parameter names
+	// as it's not appropriate for a framework to assume parameter names
+
 	// Return the first value if it exists
 	if vals, exists := values[key]; exists && len(vals) > 0 {
 		return vals[0]
@@ -929,6 +1043,9 @@ func (c *Ctx) QueryArray(key string) []string {
 	if values == nil {
 		return []string{}
 	}
+
+	// Skip the special case optimization for specific query parameter names
+	// as it's not appropriate for a framework to assume parameter names
 
 	// Return all values if they exist
 	if vals, exists := values[key]; exists {
@@ -1002,21 +1119,19 @@ func (c *Ctx) String(format string, values ...interface{}) {
 
 			// For very small strings, write directly without buffer
 			if len(format) < 64 {
-				_, _ = c.Writer.Write([]byte(format))
+				// Use zero-allocation string to bytes conversion
+				_, _ = c.Writer.Write(unsafe.S2B(format))
 				return
 			}
 
 			// For larger strings, use a buffer from the pool
-			buf := bufferPool.Get().(*bytes.Buffer)
-			buf.Reset()
+			buf := bufferPool.Get()
 
-			// Ensure the buffer has enough capacity
-			if buf.Cap() < len(format) {
-				buf.Grow(len(format) - buf.Cap())
-			}
+			// ByteBuffer automatically grows as needed
+			buf.Write(unsafe.S2B(format))
 
-			buf.WriteString(format)
-			_, _ = c.Writer.Write(buf.Bytes())
+			// Use zero-allocation bytes access
+			_, _ = c.Writer.Write(buf.B)
 			bufferPool.Put(buf)
 			return
 		}
@@ -1037,12 +1152,13 @@ func (c *Ctx) String(format string, values ...interface{}) {
 		c.Writer.WriteHeader(c.statusCode)
 
 		// Get a buffer from the pool
-		buf := bufferPool.Get().(*bytes.Buffer)
+		buf := bufferPool.Get()
 		buf.Reset()
 
 		// Use Fprintf for formatted strings
 		fmt.Fprintf(buf, format, values...)
 
+		// Use zero-allocation bytes access
 		_, _ = c.Writer.Write(buf.Bytes())
 		bufferPool.Put(buf)
 	}
@@ -1092,17 +1208,31 @@ func (c *Ctx) JSON(obj interface{}) {
 	// Fast path for simple types that can be marshaled efficiently
 	switch v := obj.(type) {
 	case string:
-		// For strings, use a buffer from the pool to avoid []byte conversion
-		buf := jsonBufferPool.Get().(*bytes.Buffer)
-		buf.Reset()
+		// For strings, write directly to the response writer with quotes
+		// Pre-allocate a buffer with exact size to avoid reallocations
+		strLen := len(v)
+		bufSize := strLen + 2 // +2 for quotes
 
-		// Write the string with quotes directly to the buffer
-		buf.Write(jsonQuote)
-		buf.WriteString(v) // Avoid []byte conversion
-		buf.Write(jsonQuote)
+		// Use a static buffer for small strings to avoid allocation
+		if bufSize <= 256 {
+			var staticBuf [256]byte
+			staticBuf[0] = '"'
+			copy(staticBuf[1:], unsafe.S2B(v))
+			staticBuf[bufSize-1] = '"'
+			_, _ = c.Writer.Write(staticBuf[:bufSize])
+			return
+		}
+
+		// For larger strings, use a buffer from the pool
+		buf := jsonBufferPool.Get()
+
+		// ByteBuffer automatically grows as needed
+		buf.WriteByte('"')
+		buf.Write(unsafe.S2B(v))
+		buf.WriteByte('"')
 
 		// Write the buffer to the response writer
-		_, _ = c.Writer.Write(buf.Bytes())
+		_, _ = c.Writer.Write(buf.B)
 
 		// Return the buffer to the pool
 		jsonBufferPool.Put(buf)
@@ -1141,48 +1271,76 @@ func (c *Ctx) JSON(obj interface{}) {
 		}
 	}
 
-	// For more complex objects, try to marshal directly first
-	data, err := json.Marshal(obj)
-	if err == nil {
-		// For small data, write directly
-		if len(data) < 256 {
-			_, _ = c.Writer.Write(data)
-			return
-		}
+	// For more complex objects, use json.Encoder directly to avoid allocations
+	// Get a buffer from the pool
+	buf := jsonBufferPool.Get()
+	buf.Reset()
 
-		// For larger data, use the dedicated JSON buffer from the pool
-		// This buffer has a larger capacity specifically for JSON responses
-		buf := jsonBufferPool.Get().(*bytes.Buffer)
-		buf.Reset()
+	// Use a pooled encoder to write directly to the buffer
+	// This avoids the allocation from both json.Marshal and creating a new encoder
+	encoder := jsonEncoderPool.Get()
+	encoder.SetWriter(buf)
 
-		// If data fits in our buffer, use the buffer
-		if len(data) < buf.Cap() {
-			buf.Write(data)
-			_, _ = c.Writer.Write(buf.Bytes())
-		} else {
-			// For very large data that exceeds our buffer capacity,
-			// write directly to the response writer to avoid an extra copy
-			_, _ = c.Writer.Write(data)
-		}
-
-		// Return the buffer to the pool
-		jsonBufferPool.Put(buf)
+	if err := encoder.Encode(obj); err != nil {
+		// Use pre-allocated error message to avoid allocation
+		c.Error(jsonEncodingErr)
+		// Return the encoder to the pool even on error
+		jsonEncoderPool.Put(encoder)
 	} else {
-		// Fallback to encoder for complex objects or if Marshal fails
-		// Use the bufPool as described in the optimization
-		buf := bufPool.Get().(*bytes.Buffer)
-		buf.Reset()
+		// Return the encoder to the pool
+		jsonEncoderPool.Put(encoder)
+		// Get the buffer bytes
+		data := buf.Bytes()
 
-		if err := json.NewEncoder(buf).Encode(obj); err != nil {
-			// Use pre-allocated error message to avoid allocation
-			c.Error(jsonEncodingErr)
-		} else {
-			_, _ = c.Writer.Write(buf.Bytes())
+		// Remove the trailing newline that json.Encoder adds
+		// This is safe because we know json.Encoder always adds a newline
+		if len(data) > 0 && data[len(data)-1] == '\n' {
+			data = data[:len(data)-1]
 		}
 
-		// Return the buffer to the pool
-		bufPool.Put(buf)
+		// Write the data to the response writer
+		_, _ = c.Writer.Write(data)
 	}
+
+	// Return the buffer to the pool
+	jsonBufferPool.Put(buf)
+}
+
+// ParseJSON parses a JSON string using fastjson and returns the parsed value.
+// It uses a pool of parsers for better performance.
+//
+// Parameters:
+//   - jsonStr: The JSON string to parse
+//
+// Returns:
+//   - The parsed JSON value, or nil if there was an error
+//   - Any error that occurred during parsing
+func (c *Ctx) ParseJSON(jsonStr string) (*fastjson.Value, error) {
+	// Get a parser from the pool
+	parser := fastjsonParserPool.Get()
+	defer fastjsonParserPool.Put(parser)
+
+	// Parse the JSON string
+	return parser.Parse(jsonStr)
+}
+
+// ParseJSONBody parses the request body as JSON using fastjson.
+// It uses a pool of parsers for better performance.
+//
+// Returns:
+//   - The parsed JSON value, or nil if there was an error
+//   - Any error that occurred during parsing
+func (c *Ctx) ParseJSONBody() (*fastjson.Value, error) {
+	if c.Request.Body == nil {
+		return nil, errors.New("request body is nil")
+	}
+
+	// Get a parser from the pool
+	parser := fastjsonParserPool.Get()
+	defer fastjsonParserPool.Put(parser)
+
+	// Parse the JSON body
+	return parser.ParseBytes(c.Request.Body)
 }
 
 // Pre-allocated content type for HTML responses to avoid allocations
@@ -1219,25 +1377,19 @@ func (c *Ctx) HTML(html string) {
 
 	// Fast path for small HTML strings (avoid buffer allocation)
 	if len(html) < 512 {
-		_, _ = c.Writer.Write([]byte(html))
+		// Use zero-allocation string to bytes conversion
+		_, _ = c.Writer.Write(unsafe.S2B(html))
 		return
 	}
 
 	// For larger strings, use a buffer from the pool
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
+	buf := bufferPool.Get()
 
-	// Ensure the buffer has enough capacity to avoid reallocations
-	if buf.Cap() < len(html) {
-		// If the buffer is too small, grow it
-		buf.Grow(len(html) - buf.Cap())
-	}
+	// ByteBuffer automatically grows as needed
+	buf.Write(unsafe.S2B(html))
 
-	// Write the HTML string to the buffer
-	buf.WriteString(html)
-
-	// Write directly from the buffer
-	_, _ = c.Writer.Write(buf.Bytes())
+	// Write directly from the buffer using zero-allocation bytes access
+	_, _ = c.Writer.Write(buf.B)
 
 	// Return buffer to pool
 	bufferPool.Put(buf)
@@ -1268,20 +1420,13 @@ func (c *Ctx) Data(contentType string, data []byte) {
 
 	// For larger data, use a buffer from the pool to avoid multiple small writes
 	// This reduces allocations and improves performance
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
+	buf := bufferPool.Get()
 
-	// Ensure the buffer has enough capacity to avoid reallocations
-	if buf.Cap() < len(data) {
-		// If the buffer is too small, grow it
-		buf.Grow(len(data) - buf.Cap())
-	}
-
-	// Write the data to the buffer
+	// ByteBuffer automatically grows as needed
 	buf.Write(data)
 
 	// Write directly from the buffer
-	_, _ = c.Writer.Write(buf.Bytes())
+	_, _ = c.Writer.Write(buf.B)
 
 	// Return buffer to pool
 	bufferPool.Put(buf)

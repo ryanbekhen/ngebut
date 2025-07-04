@@ -13,6 +13,13 @@ type benchResponse struct {
 	Data    any    `json:"data,omitempty"`
 }
 
+// Fixed data struct to avoid map allocations
+type benchResponseData struct {
+	Field1 string `json:"field1"`
+	Field2 string `json:"field2"`
+	Field3 string `json:"field3"`
+}
+
 // BenchmarkRouting benchmarks the routing performance
 func BenchmarkRouting(b *testing.B) {
 	// Setup
@@ -88,6 +95,13 @@ func BenchmarkRouting(b *testing.B) {
 	})
 }
 
+// Shared data struct instance to avoid repeated allocations
+var sharedData = &benchResponseData{
+	Field1: "value1",
+	Field2: "value2",
+	Field3: "value3",
+}
+
 // Pool for large JSON response objects
 var largeResponsePool = sync.Pool{
 	New: func() interface{} {
@@ -97,11 +111,7 @@ var largeResponsePool = sync.Pool{
 			data[i] = benchResponse{
 				Message: "Item " + string(rune(i)),
 				Status:  200,
-				Data: map[string]string{
-					"field1": "value1",
-					"field2": "value2",
-					"field3": "value3",
-				},
+				Data:    sharedData, // Use shared data struct instance to avoid allocations
 			}
 		}
 		return &data

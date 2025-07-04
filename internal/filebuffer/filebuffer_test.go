@@ -3,11 +3,13 @@ package filebuffer
 import (
 	"bytes"
 	"testing"
+
+	"github.com/valyala/bytebufferpool"
 )
 
 func TestBufferPool(t *testing.T) {
 	// Get a buffer from the pool
-	buf := GetBuffer()
+	var buf *bytebufferpool.ByteBuffer = GetBuffer()
 	if buf == nil {
 		t.Fatal("GetBuffer() returned nil")
 	}
@@ -17,17 +19,12 @@ func TestBufferPool(t *testing.T) {
 		t.Errorf("Expected empty buffer, got length %d", buf.Len())
 	}
 
-	// Check that the buffer has the expected capacity
-	if buf.Cap() < 64*1024 {
-		t.Errorf("Expected buffer capacity >= 64KB, got %d bytes", buf.Cap())
-	}
-
 	// Write some data to the buffer
 	testData := []byte("test data")
 	buf.Write(testData)
 
 	// Check that the buffer contains the expected data
-	if !bytes.Equal(buf.Bytes(), testData) {
+	if !bytes.Equal(buf.B, testData) {
 		t.Errorf("Buffer contains unexpected data")
 	}
 

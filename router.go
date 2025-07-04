@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"github.com/ryanbekhen/ngebut/internal/filebuffer"
 	"github.com/ryanbekhen/ngebut/internal/filecache"
+	"github.com/ryanbekhen/ngebut/internal/pool"
 	"github.com/ryanbekhen/ngebut/internal/radix"
 	"github.com/ryanbekhen/ngebut/internal/unsafe"
 	"io"
 	"mime"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,38 +28,35 @@ type route struct {
 	HasParams  bool     // Precomputed flag indicating if the route has parameters
 	ParamCount int      // Precomputed count of parameters in the route
 	ParamNames []string // Precomputed parameter names
+
+	// Fields for optimized byte scanning
+	Segments   []string // Pattern segments for optimized matching
+	IsWildcard []bool   // Whether each segment is a wildcard
+	IsParam    []bool   // Whether each segment is a parameter
 }
 
 // middlewareStackPool is a pool of middleware stacks for reuse
 // This pool helps reduce memory allocations by reusing middleware stacks
 // instead of creating new ones for each request.
-var middlewareStackPool = sync.Pool{
-	New: func() interface{} {
-		// Create a middleware stack with a larger initial capacity to reduce allocations
-		return make([]MiddlewareFunc, 0, 32)
-	},
-}
+var middlewareStackPool = pool.New(func() []MiddlewareFunc {
+	// Create a middleware stack with a larger initial capacity to reduce allocations
+	return make([]MiddlewareFunc, 0, 32)
+})
 
 // routeSegmentPool is a pool for route segments to reduce allocations
-var routeSegmentPool = sync.Pool{
-	New: func() interface{} {
-		return make([]string, 0, 8)
-	},
-}
+var routeSegmentPool = pool.New(func() []string {
+	return make([]string, 0, 8)
+})
 
 // stringBuilderPool is a pool for string builders to reduce allocations
-var stringBuilderPool = sync.Pool{
-	New: func() interface{} {
-		return new(strings.Builder)
-	},
-}
+var stringBuilderPool = pool.New(func() *strings.Builder {
+	return new(strings.Builder)
+})
 
 // allowedMethodsPool is a pool for allowed methods slices to reduce allocations
-var allowedMethodsPool = sync.Pool{
-	New: func() interface{} {
-		return make([]string, 0, 8)
-	},
-}
+var allowedMethodsPool = pool.New(func() []string {
+	return make([]string, 0, 8)
+})
 
 // Router is an HTTP request router.
 type Router struct {
@@ -66,6 +65,10 @@ type Router struct {
 	routeTrees      map[string]*radix.Tree // Radix trees indexed by method for faster lookup
 	middlewareFuncs []MiddlewareFunc
 	NotFound        Handler
+
+	// Cache for compiled middleware chains to avoid repeated compilation
+	// The key is a hash of the middleware chain and the handler
+	middlewareCache sync.Map // map[uint64]Handler
 }
 
 // NewRouter creates a new Router.
@@ -104,12 +107,12 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 
 	if strings.Contains(pattern, ":") || strings.Contains(pattern, "*") {
 		// Get a string builder from the pool
-		sb := stringBuilderPool.Get().(*strings.Builder)
+		sb := stringBuilderPool.Get()
 		sb.Reset()
 		defer stringBuilderPool.Put(sb)
 
 		// Get a segments slice from the pool
-		segments := routeSegmentPool.Get().([]string)
+		segments := routeSegmentPool.Get()
 		segments = segments[:0]
 		defer routeSegmentPool.Put(segments)
 
@@ -160,8 +163,8 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 
 	// Extract parameter names
 	var paramNames []string
-	if hasParams {
-		paramNames = make([]string, 0, paramCount)
+	if hasParams || strings.Contains(pattern, "*") {
+		paramNames = make([]string, 0, paramCount+strings.Count(pattern, "*"))
 		start := 0
 		for i := 0; i < len(pattern); i++ {
 			if pattern[i] == ':' {
@@ -177,11 +180,52 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 					// Parameter ends at a slash
 					paramNames = append(paramNames, pattern[start:start+end])
 				}
+			} else if pattern[i] == '*' {
+				// Found a wildcard parameter
+				// Check if it's a standalone * or part of another string
+				if (i == 0 || pattern[i-1] == '/') && (i == len(pattern)-1 || pattern[i+1] == '/') {
+					// Standalone wildcard parameter
+					paramNames = append(paramNames, "*")
+				}
 			}
 		}
 	}
 
 	regex := regexp.MustCompile(regexPattern)
+
+	// Parse pattern into segments for optimized byte scanning
+	segments := make([]string, 0, 8)
+	isWildcard := make([]bool, 0, 8)
+	isParam := make([]bool, 0, 8)
+
+	// Skip leading slash if present
+	startIndex := 0
+	if len(pattern) > 0 && pattern[0] == '/' {
+		startIndex = 1
+	}
+
+	// Split pattern into segments
+	start := startIndex
+	for i := startIndex; i < len(pattern); i++ {
+		if pattern[i] == '/' {
+			if i > start {
+				segment := pattern[start:i]
+				segments = append(segments, segment)
+				isWildcard = append(isWildcard, segment == "*")
+				isParam = append(isParam, len(segment) > 0 && segment[0] == ':')
+			}
+			start = i + 1
+		}
+	}
+
+	// Add the last segment if there is one
+	if start < len(pattern) {
+		segment := pattern[start:]
+		segments = append(segments, segment)
+		isWildcard = append(isWildcard, segment == "*")
+		isParam = append(isParam, len(segment) > 0 && segment[0] == ':')
+	}
+
 	newRoute := route{
 		Pattern:    pattern,
 		Method:     method,
@@ -190,6 +234,9 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 		HasParams:  hasParams,
 		ParamCount: paramCount,
 		ParamNames: paramNames,
+		Segments:   segments,
+		IsWildcard: isWildcard,
+		IsParam:    isParam,
 	}
 
 	// Add to the main routes slice
@@ -354,7 +401,7 @@ func createStaticHandler(prefix, root string, config Static) Handler {
 					fileInfo = indexInfo
 				} else if config.Browse {
 					// Serve directory listing
-					serveDirectoryListing(c, fullPath, filePath, config)
+					serveDirectoryListing(c, fullPath, filePath)
 					return
 				} else {
 					c.Status(StatusForbidden)
@@ -363,7 +410,7 @@ func createStaticHandler(prefix, root string, config Static) Handler {
 				}
 			} else if config.Browse {
 				// No index file specified, serve directory listing
-				serveDirectoryListing(c, fullPath, filePath, config)
+				serveDirectoryListing(c, fullPath, filePath)
 				return
 			} else {
 				c.Status(StatusForbidden)
@@ -524,7 +571,7 @@ func getFDCacheInstance(maxSize int, expiration time.Duration) *filecache.FDCach
 
 // serveFile serves a single file
 func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
-	// Determine content type using the cache
+	// Determine content type using the cache - do this once and reuse
 	contentType := getMimeType(filepath.Ext(filePath))
 
 	// Check if in-memory caching is enabled
@@ -545,11 +592,12 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 					config.ModifyResponse(c)
 				}
 
-				// Set content type header
+				// Set content type header directly from cached value
 				c.Set("Content-Type", cachedFile.ContentType)
 
-				// Serve from cache
-				c.Data(cachedFile.ContentType, cachedFile.Data)
+				// Serve from cache - write directly to avoid allocation
+				c.Writer.WriteHeader(c.statusCode)
+				_, _ = c.Writer.Write(cachedFile.Data)
 				return
 			}
 		}
@@ -567,9 +615,34 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 
 			// Set content type header
 			c.Set("Content-Type", contentType)
+			c.Writer.WriteHeader(c.statusCode)
 
-			// Open the file
-			file, err := os.Open(filePath)
+			// Try to get a cached file descriptor first
+			fdCache := getFDCacheInstance(100, 5*time.Minute)
+			var file *os.File
+			var err error
+
+			if fd, exists := fdCache.Get(filePath); exists && !fdCache.IsModified(filePath, fileInfo) {
+				// Use the cached file descriptor
+				file = fd.File
+
+				// Seek to the beginning of the file
+				if _, err = file.Seek(0, 0); err == nil {
+					// Get a read buffer from the pool for more efficient copying
+					buf := filebuffer.GetReadBuffer()
+					_, err = io.CopyBuffer(c.Writer, file, buf)
+					filebuffer.ReleaseReadBuffer(buf)
+
+					if err == nil {
+						return
+					}
+				}
+				// If seeking or copying fails, we'll fall through to opening a new file
+				fdCache.Remove(filePath)
+			}
+
+			// Open the file if we couldn't use a cached descriptor
+			file, err = os.Open(filePath)
 			if err != nil {
 				c.Status(StatusInternalServerError)
 				c.String("Error opening file")
@@ -577,8 +650,11 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 			}
 			defer file.Close()
 
-			// Stream directly to the response writer
-			_, err = io.Copy(c.Writer, file)
+			// Get a read buffer from the pool for more efficient copying
+			buf := filebuffer.GetReadBuffer()
+			_, err = io.CopyBuffer(c.Writer, file, buf)
+			filebuffer.ReleaseReadBuffer(buf)
+
 			if err != nil {
 				logger.Error().Err(err).Msg("Error streaming file to response")
 			}
@@ -629,9 +705,11 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 		// Reset the buffer to ensure it's empty
 		buf.Reset()
 
-		// Use io.Copy to efficiently stream the file to the buffer
-		// This avoids manual read/write loops and is more efficient
-		_, err = io.Copy(buf, file)
+		// Use io.Copy with a read buffer from the pool for more efficient copying
+		readBuf := filebuffer.GetReadBuffer()
+		_, err = io.CopyBuffer(buf, file, readBuf)
+		filebuffer.ReleaseReadBuffer(readBuf)
+
 		if err != nil {
 			c.Status(StatusInternalServerError)
 			c.String("Error reading file")
@@ -652,6 +730,7 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 
 		// Set content type header
 		c.Set("Content-Type", contentType)
+		c.Writer.WriteHeader(c.statusCode)
 
 		// Stream the buffer directly to the response writer
 		// This avoids an extra allocation and copy
@@ -671,12 +750,36 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 			config.ModifyResponse(c)
 		}
 
-		// Set content type header
+		// Set the content type header
 		c.Set("Content-Type", contentType)
+		c.Writer.WriteHeader(c.statusCode)
 
-		// Open the file directly without caching the descriptor
-		// This is more efficient for large files that are accessed infrequently
-		file, err := os.Open(filePath)
+		// Try to get a cached file descriptor first
+		fdCache := getFDCacheInstance(100, 5*time.Minute)
+		var file *os.File
+		var err error
+
+		if fd, exists := fdCache.Get(filePath); exists && !fdCache.IsModified(filePath, fileInfo) {
+			// Use the cached file descriptor
+			file = fd.File
+
+			// Seek to the beginning of the file
+			if _, err = file.Seek(0, 0); err == nil {
+				// Get a read buffer from the pool for more efficient copying
+				buf := filebuffer.GetReadBuffer()
+				_, err = io.CopyBuffer(c.Writer, file, buf)
+				filebuffer.ReleaseReadBuffer(buf)
+
+				if err == nil {
+					return
+				}
+			}
+			// If seeking or copying fails, we'll fall through to opening a new file
+			fdCache.Remove(filePath)
+		}
+
+		// Open the file if we couldn't use a cached descriptor
+		file, err = os.Open(filePath)
 		if err != nil {
 			c.Status(StatusInternalServerError)
 			c.String("Error opening file")
@@ -684,8 +787,11 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 		}
 		defer file.Close()
 
-		// Stream directly to the response writer
-		_, err = io.Copy(c.Writer, file)
+		// Get a read buffer from the pool for more efficient copying
+		buf := filebuffer.GetReadBuffer()
+		_, err = io.CopyBuffer(c.Writer, file, buf)
+		filebuffer.ReleaseReadBuffer(buf)
+
 		if err != nil {
 			logger.Error().Err(err).Msg("Error streaming file to response")
 		}
@@ -739,10 +845,13 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 
 	// Set content type header
 	c.Set("Content-Type", contentType)
+	c.Writer.WriteHeader(c.statusCode)
 
-	// Use io.Copy to efficiently stream the file directly to the response writer
-	// This avoids manual read/write loops and buffer allocations
-	_, err = io.Copy(c.Writer, file)
+	// Use io.CopyBuffer with a read buffer from the pool for more efficient copying
+	buf := filebuffer.GetReadBuffer()
+	_, err = io.CopyBuffer(c.Writer, file, buf)
+	filebuffer.ReleaseReadBuffer(buf)
+
 	if err != nil {
 		logger.Error().Err(err).Msg("Error streaming file to response")
 	}
@@ -997,7 +1106,7 @@ func serveFileWithRange(c *Ctx, filePath string, fileInfo os.FileInfo, config St
 }
 
 // serveDirectoryListing serves a directory listing
-func serveDirectoryListing(c *Ctx, dirPath, urlPath string, config Static) {
+func serveDirectoryListing(c *Ctx, dirPath, urlPath string) {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		c.Status(StatusInternalServerError)
@@ -1274,100 +1383,190 @@ func (r *Router) STATIC(prefix, root string, config ...Static) *Router {
 	return r.HandleStatic(prefix, root, config...)
 }
 
-// We're using the paramSlicePool from param_struct.go instead of paramContextPool
-// This reduces allocations and improves performance
-
-// getParamContext gets a parameter slice from the pool
-// This is a compatibility wrapper for the new paramSlice type
-func getParamContext() *paramSlice {
-	return getParamSlice()
-}
-
-// releaseParamContext returns a parameter slice to the pool
-// This is a compatibility wrapper for the new paramSlice type
-func releaseParamContext(ps *paramSlice) {
-	releaseParamSlice(ps)
-}
-
-// releaseParamContextKey is the key used to store the function that releases the parameter context
-type releaseParamContextKey struct{}
-
-// paramContextReleaser is a struct that holds a parameter context to be released
-type paramContextReleaser struct {
-	paramCtx *paramSlice
-}
-
-// releaseParamContextPool is a pool of paramContextReleaser objects for reuse
-var releaseParamContextPool = sync.Pool{
-	New: func() interface{} {
-		return &paramContextReleaser{}
-	},
-}
-
-// paramsMapPool is a pool of map[string]string objects for reuse
-var paramsMapPool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]string, 8) // Pre-allocate with capacity for 8 params
-	},
-}
-
-// getParamsMap gets a parameter map from the pool
-func getParamsMap() map[string]string {
-	return paramsMapPool.Get().(map[string]string)
-}
-
-// releaseParamsMap returns a parameter map to the pool
-func releaseParamsMap(m map[string]string) {
-	// Clear the map
-	for k := range m {
-		delete(m, k)
+// matchRouteByteScanning matches a path against a route using byte scanning
+// This is more efficient than regex-based matching for parameter extraction
+// Returns true if the path matches the route and populates the matches slice with parameter values
+func matchRouteByteScanning(route *route, path string, matches *[]string) bool {
+	// Skip leading slash if present
+	pathStartIndex := 0
+	if len(path) > 0 && path[0] == '/' {
+		pathStartIndex = 1
 	}
-	paramsMapPool.Put(m)
-}
 
-// getParamContextReleaser gets a paramContextReleaser from the pool and initializes it
-func getParamContextReleaser(paramCtx *paramSlice) *paramContextReleaser {
-	releaser := releaseParamContextPool.Get().(*paramContextReleaser)
-	releaser.paramCtx = paramCtx
-	return releaser
-}
-
-// release releases the parameter context and returns the releaser to the pool
-func (r *paramContextReleaser) release() {
-	if r.paramCtx != nil {
-		releaseParamContext(r.paramCtx)
-		r.paramCtx = nil
+	// Split path into segments
+	pathSegments := make([]string, 0, 8)
+	start := pathStartIndex
+	for i := pathStartIndex; i < len(path); i++ {
+		if path[i] == '/' {
+			if i > start {
+				pathSegments = append(pathSegments, path[start:i])
+			}
+			start = i + 1
+		}
 	}
-	releaseParamContextPool.Put(r)
+
+	// Add the last segment if there is one
+	if start < len(path) {
+		pathSegments = append(pathSegments, path[start:])
+	}
+
+	// Quick check: if segment counts don't match and there's no wildcard, it can't match
+	if len(pathSegments) != len(route.Segments) {
+		// Check if the route has a wildcard segment that could match multiple path segments
+		hasWildcard := false
+		for _, isWild := range route.IsWildcard {
+			if isWild {
+				hasWildcard = true
+				break
+			}
+		}
+
+		if !hasWildcard {
+			return false
+		}
+	}
+
+	// Reset matches slice and add full path as first match (to mimic regex behavior)
+	*matches = (*matches)[:0]
+	*matches = append(*matches, path)
+
+	// Match segments
+	pathIndex := 0
+	for i, segment := range route.Segments {
+		// Special case for wildcard at the end of the route
+		if route.IsWildcard[i] && i == len(route.Segments)-1 {
+			// Last segment is wildcard - capture all remaining path segments
+			// This works even if there are no more path segments (empty wildcard)
+			wildValue := ""
+			if pathIndex < len(pathSegments) {
+				wildValue = strings.Join(pathSegments[pathIndex:], "/")
+			}
+			*matches = append(*matches, wildValue)
+			return true
+		}
+
+		// If we've run out of path segments, this can only match if all remaining route segments are optional
+		if pathIndex >= len(pathSegments) {
+			return false
+		}
+
+		if route.IsParam[i] {
+			// Parameter segment - capture the value
+			*matches = append(*matches, pathSegments[pathIndex])
+			pathIndex++
+		} else if route.IsWildcard[i] {
+			// Non-terminal wildcard - this is complex and rare, fall back to regex
+			return false
+		} else {
+			// Static segment - must match exactly
+			if segment != pathSegments[pathIndex] {
+				return false
+			}
+			pathIndex++
+		}
+	}
+
+	// All segments matched and we've consumed all path segments
+	return pathIndex == len(pathSegments)
 }
 
 // handleMatchedRoute handles a route that matched the path and method
-func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches []string, path string) {
+func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches []string) {
 	// Extract URL parameters using precomputed values
 	if route.HasParams {
 		// Get a routeParams struct from the pool (new optimized approach)
-		routeParams := getRouteParams()
-
-		// Store parameters directly in the context's paramCache
-		// This avoids the expensive context.WithValue and req.WithContext operations
-		ctx.paramCache.routeParams = routeParams
+		// Only if we don't already have one in the context
+		var routeParams *routeParams
+		if ctx.paramCache.routeParams != nil {
+			// Reuse the existing routeParams to avoid allocation
+			routeParams = ctx.paramCache.routeParams
+			routeParams.Reset()
+		} else {
+			routeParams = getRouteParams()
+			// Store parameters directly in the context's paramCache
+			// This avoids the expensive context.WithValue and req.WithContext operations
+			ctx.paramCache.routeParams = routeParams
+		}
 		ctx.paramCache.valid = true
 
 		// Extract parameters directly from regex matches using precomputed parameter names
 		// The regex pattern is created to capture each parameter in order
 		paramIndex := 1 // Start from 1 to skip the full match
 
-		// Reset the keys and values slices without allocating
-		// This is safe because we've pre-allocated the slices with capacity for common routes
-		routeParams.Reset()
-
 		// Use the precomputed parameter names to avoid string slicing at runtime
-		for _, paramName := range route.ParamNames {
+		// First try to use fixed-size arrays for parameters (zero allocation path)
+		paramCount := len(route.ParamNames)
+		useFixedArrays := paramCount <= len(routeParams.fixedKeys)
+
+		// Fast path for common case of 1-2 parameters
+		if useFixedArrays && paramCount <= 2 && paramCount > 0 {
+			// Unrolled loop for 1-2 parameters (most common case)
+			// This avoids the loop overhead and bounds checking
 			if paramIndex < len(matches) {
-				// Add directly to the keys and values slices
-				routeParams.keys = append(routeParams.keys, paramName)
-				routeParams.values = append(routeParams.values, matches[paramIndex])
+				// Store parameter name directly (it's already a string, no allocation)
+				routeParams.fixedKeys[0] = route.ParamNames[0]
+
+				// Store parameter value directly (it's already a string, no allocation)
+				routeParams.fixedValues[0] = matches[paramIndex]
+
+				// Compute and store hash code for faster lookups
+				routeParams.fixedHashes[0] = stringHash(route.ParamNames[0])
+
+				routeParams.count = 1
 				paramIndex++
+
+				if paramCount == 2 && paramIndex < len(matches) {
+					// Store parameter name directly (it's already a string, no allocation)
+					routeParams.fixedKeys[1] = route.ParamNames[1]
+
+					// Store parameter value directly (it's already a string, no allocation)
+					routeParams.fixedValues[1] = matches[paramIndex]
+
+					// Compute and store hash code for faster lookups
+					routeParams.fixedHashes[1] = stringHash(route.ParamNames[1])
+
+					routeParams.count = 2
+				}
+			}
+		} else {
+			// General case for any number of parameters
+			for i, paramName := range route.ParamNames {
+				if paramIndex < len(matches) {
+					if useFixedArrays {
+						// Use fixed-size arrays for small number of parameters (zero allocation)
+						// Store parameter name directly (it's already a string, no allocation)
+						routeParams.fixedKeys[i] = paramName
+
+						// Store parameter value directly (it's already a string, no allocation)
+						routeParams.fixedValues[i] = matches[paramIndex]
+
+						// Compute and store hash code for faster lookups
+						routeParams.fixedHashes[i] = stringHash(paramName)
+
+						routeParams.count++
+					} else {
+						// Fall back to dynamic slices for routes with many parameters
+						// Avoid append if possible by pre-allocating slices
+						if i < cap(routeParams.keys) {
+							// If we have enough capacity, just set the values directly
+							if i >= len(routeParams.keys) {
+								// Extend the slices without allocation
+								routeParams.keys = routeParams.keys[:i+1]
+								routeParams.values = routeParams.values[:i+1]
+								routeParams.hashes = routeParams.hashes[:i+1]
+							}
+							routeParams.keys[i] = paramName
+							routeParams.values[i] = matches[paramIndex]
+							routeParams.hashes[i] = stringHash(paramName)
+						} else {
+							// If we don't have enough capacity, append (this will allocate)
+							routeParams.keys = append(routeParams.keys, paramName)
+							routeParams.values = append(routeParams.values, matches[paramIndex])
+							routeParams.hashes = append(routeParams.hashes, stringHash(paramName))
+						}
+					}
+					paramIndex++
+				}
 			}
 		}
 
@@ -1380,6 +1579,30 @@ func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches
 
 	// Set up the middleware stack with both global middleware and route handlers
 	r.setupMiddleware(ctx, route.Handlers)
+}
+
+// generateMiddlewareHash generates a hash for a middleware chain and handler
+// This is used as a key for the middleware cache
+func (r *Router) generateMiddlewareHash(middleware []Middleware, handler Handler) uint64 {
+	// Use FNV-1a hash algorithm
+	h := uint64(14695981039346656037) // FNV offset basis
+
+	// Hash the global middleware functions
+	for _, m := range middleware {
+		// Get the pointer value of the middleware function
+		ptr := reflect.ValueOf(m).Pointer()
+
+		// Mix the pointer into the hash
+		h ^= uint64(ptr)
+		h *= 1099511628211 // FNV prime
+	}
+
+	// Hash the handler function
+	handlerPtr := reflect.ValueOf(handler).Pointer()
+	h ^= uint64(handlerPtr)
+	h *= 1099511628211 // FNV prime
+
+	return h
 }
 
 // setupMiddleware sets up the middleware stack for a request
@@ -1397,13 +1620,91 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 		return
 	}
 
+	// Fast path: use compile-time middleware chaining for better performance
+	// This avoids all allocations and dynamic dispatch overhead
+	if globalMiddlewareCount > 0 {
+		// Get the final handler
+		finalHandler := handlers[handlerCount-1]
+
+		// Create a slice to hold all middleware
+		allMiddleware := make([]Middleware, 0, globalMiddlewareCount+handlerCount-1)
+
+		// Add global middleware
+		for _, m := range r.middlewareFuncs {
+			allMiddleware = append(allMiddleware, m)
+		}
+
+		// Add route handlers except the last one as middleware
+		if handlerCount > 1 {
+			for i := 0; i < handlerCount-1; i++ {
+				allMiddleware = append(allMiddleware, Middleware(handlers[i]))
+			}
+		}
+
+		// Generate a hash for this middleware chain and handler
+		hash := r.generateMiddlewareHash(allMiddleware, finalHandler)
+
+		// Check if we have a cached compiled handler
+		if cachedHandler, ok := r.middlewareCache.Load(hash); ok {
+			// Use the cached handler
+			cachedHandler.(Handler)(ctx)
+			return
+		}
+
+		// Create a compiled handler that executes all middleware and the final handler
+		compiledHandler := CompileMiddleware(finalHandler, allMiddleware...)
+
+		// Cache the compiled handler for future use
+		r.middlewareCache.Store(hash, compiledHandler)
+
+		// Execute the compiled handler
+		compiledHandler(ctx)
+		return
+	}
+
+	// If we only have route handlers (no global middleware), we can optimize further
+	if handlerCount == 1 {
+		// Just call the single handler directly
+		handlers[0](ctx)
+		return
+	} else {
+		// Get the final handler
+		finalHandler := handlers[handlerCount-1]
+
+		// Create a slice to hold route handlers as middleware
+		routeMiddleware := make([]Middleware, 0, handlerCount-1)
+
+		// Add all but the last handler as middleware
+		for i := 0; i < handlerCount-1; i++ {
+			routeMiddleware = append(routeMiddleware, Middleware(handlers[i]))
+		}
+
+		// Generate a hash for this middleware chain and handler
+		hash := r.generateMiddlewareHash(routeMiddleware, finalHandler)
+
+		// Check if we have a cached compiled handler
+		if cachedHandler, ok := r.middlewareCache.Load(hash); ok {
+			// Use the cached handler
+			cachedHandler.(Handler)(ctx)
+			return
+		}
+
+		// Create a compiled handler that executes all middleware and the final handler
+		compiledHandler := CompileMiddleware(finalHandler, routeMiddleware...)
+
+		// Cache the compiled handler for future use
+		r.middlewareCache.Store(hash, compiledHandler)
+
+		// Execute the compiled handler
+		compiledHandler(ctx)
+	}
+
+	// Legacy path: fall back to dynamic middleware for backward compatibility
+	// This should never be reached with the new implementation but kept for safety
+
 	// Calculate the total middleware size
 	totalMiddleware := globalMiddlewareCount + handlerCount - 1
 	if totalMiddleware <= 0 {
-		// No middleware and no handlers, or just one handler
-		if handlerCount == 1 {
-			handlers[0](ctx)
-		}
 		return
 	}
 
@@ -1412,13 +1713,6 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 	if totalMiddleware <= len(ctx.fixedMiddleware) {
 		// Reset the fixed middleware count
 		ctx.fixedCount = totalMiddleware
-
-		// Copy the global middleware functions directly to the fixed buffer
-		if globalMiddlewareCount > 0 {
-			for i := 0; i < globalMiddlewareCount; i++ {
-				ctx.fixedMiddleware[i] = r.middlewareFuncs[i]
-			}
-		}
 
 		// Add all but the last handler as middleware directly to the fixed buffer
 		if handlerCount > 1 {
@@ -1445,7 +1739,7 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 		ctx.middlewareStack = ctx.middlewareStack[:totalMiddleware]
 	} else {
 		// Get a middleware stack from the pool
-		stack := middlewareStackPool.Get().([]MiddlewareFunc)
+		stack := middlewareStackPool.Get()
 
 		if cap(stack) >= totalMiddleware {
 			// Reuse the stack with the right size
@@ -1456,7 +1750,7 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 
 			// Get another stack from the pool - we've increased the default capacity,
 			// so this should be rare
-			stack = middlewareStackPool.Get().([]MiddlewareFunc)
+			stack = middlewareStackPool.Get()
 
 			if cap(stack) >= totalMiddleware {
 				// Use this stack if it's big enough
@@ -1483,11 +1777,6 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 	// Reset the fixed middleware count to indicate we're using the dynamic stack
 	ctx.fixedCount = 0
 
-	// Copy the global middleware functions in one operation if any exist
-	if globalMiddlewareCount > 0 {
-		copy(ctx.middlewareStack[:globalMiddlewareCount], r.middlewareFuncs)
-	}
-
 	// Add all but the last handler as middleware
 	// Use direct indexing for better performance
 	if handlerCount > 1 {
@@ -1512,6 +1801,66 @@ var methodNotAllowedHandler = func(c *Ctx) {
 	c.String("Method Not Allowed")
 }
 
+// pathMatchContext is a reusable context for path matching operations
+// It pre-allocates memory for common operations to reduce allocations
+type pathMatchContext struct {
+	// Segments for path matching
+	segments []string
+
+	// Temporary byte slice for path operations
+	pathBytes []byte
+
+	// Reusable parameter map
+	params map[string]string
+
+	// Pre-allocated slices for parameter keys and values
+	// These are used to avoid allocations when copying parameters
+	paramKeys   []string
+	paramValues []string
+}
+
+// Reset resets the context for reuse
+func (c *pathMatchContext) Reset() {
+	// Clear segments without deallocating
+	c.segments = c.segments[:0]
+
+	// Clear pathBytes without deallocating
+	c.pathBytes = c.pathBytes[:0]
+
+	// Clear params without deallocating
+	for k := range c.params {
+		delete(c.params, k)
+	}
+
+	// Clear parameter keys and values without deallocating
+	c.paramKeys = c.paramKeys[:0]
+	c.paramValues = c.paramValues[:0]
+}
+
+// pathMatchContextPool is a pool of pathMatchContext objects
+var pathMatchContextPool = sync.Pool{
+	New: func() interface{} {
+		return &pathMatchContext{
+			segments:    make([]string, 0, 16),      // Pre-allocate for common path depth
+			pathBytes:   make([]byte, 0, 128),       // Pre-allocate for common path length
+			params:      make(map[string]string, 8), // Pre-allocate for common number of params
+			paramKeys:   make([]string, 0, 16),      // Pre-allocate for common number of parameters
+			paramValues: make([]string, 0, 16),      // Pre-allocate for common number of parameters
+		}
+	},
+}
+
+// getPathMatchContext gets a pathMatchContext from the pool
+func getPathMatchContext() *pathMatchContext {
+	return pathMatchContextPool.Get().(*pathMatchContext)
+}
+
+// releasePathMatchContext returns a pathMatchContext to the pool
+func releasePathMatchContext(ctx *pathMatchContext) {
+	ctx.Reset()
+	pathMatchContextPool.Put(ctx)
+}
+
 // ServeHTTP implements a modified http.Handler interface that accepts a Ctx.
 func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 	path := req.URL.Path
@@ -1534,15 +1883,16 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 		}
 
 		// If no static match, try with parameters
-		// Get a map from the pool to store path parameters
-		params := getParamsMap()
+		// Get a path match context from the pool for optimized path matching
+		pathCtx := getPathMatchContext()
+		defer releasePathMatchContext(pathCtx)
 
 		// Try to find a match in the radix tree using byte slice path
-		if handlers, found := tree.FindBytes(pathBytes, params); found {
+		if handlers, found := tree.FindBytes(pathBytes, pathCtx.params); found {
 			if handlerSlice, ok := handlers[method].([]Handler); ok {
 				// We found a match, handle it
 				// Create a context with the parameters
-				if len(params) > 0 {
+				if len(pathCtx.params) > 0 {
 					// Get a routeParams struct from the pool (new optimized approach)
 					routeParams := getRouteParams()
 
@@ -1556,47 +1906,105 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 					routeParams.Reset()
 
 					// Copy parameters from the radix tree match
-					// Add all parameters to the keys and values slices in one pass
-					for k, v := range params {
-						routeParams.keys = append(routeParams.keys, k)
-						routeParams.values = append(routeParams.values, v)
+					// First try to use fixed-size arrays for parameters (zero allocation path)
+					paramCount := len(pathCtx.params)
+					useFixedArrays := paramCount <= len(routeParams.fixedKeys)
+
+					// Extract parameter keys and values directly without map iteration
+					// This is much faster than iterating over the map
+					pathCtx.paramKeys = pathCtx.paramKeys[:0]
+					pathCtx.paramValues = pathCtx.paramValues[:0]
+
+					// Pre-allocate slices to avoid append allocations
+					if cap(pathCtx.paramKeys) < len(pathCtx.params) {
+						pathCtx.paramKeys = make([]string, 0, len(pathCtx.params))
+						pathCtx.paramValues = make([]string, 0, len(pathCtx.params))
+					}
+
+					// Process all parameters without assuming specific parameter names
+					// This is more appropriate for a framework that should work with any parameter names
+					for k, v := range pathCtx.params {
+						pathCtx.paramKeys = append(pathCtx.paramKeys, k)
+						pathCtx.paramValues = append(pathCtx.paramValues, v)
+					}
+
+					// Fast path for common case of 1-2 parameters
+					if useFixedArrays && paramCount <= 2 && paramCount > 0 {
+						// Unrolled loop for 1-2 parameters (most common case)
+						// This avoids the loop overhead and bounds checking
+						routeParams.fixedKeys[0] = pathCtx.paramKeys[0]
+						routeParams.fixedValues[0] = pathCtx.paramValues[0]
+						routeParams.fixedHashes[0] = stringHash(pathCtx.paramKeys[0])
+						routeParams.count = 1
+
+						// If there's a second parameter, add it
+						if paramCount == 2 {
+							routeParams.fixedKeys[1] = pathCtx.paramKeys[1]
+							routeParams.fixedValues[1] = pathCtx.paramValues[1]
+							routeParams.fixedHashes[1] = stringHash(pathCtx.paramKeys[1])
+							routeParams.count = 2
+						}
+					} else {
+						// General case for any number of parameters
+						for i := 0; i < paramCount; i++ {
+							if useFixedArrays {
+								// Use fixed-size arrays for small number of parameters (zero allocation)
+								routeParams.fixedKeys[i] = pathCtx.paramKeys[i]
+								routeParams.fixedValues[i] = pathCtx.paramValues[i]
+								routeParams.fixedHashes[i] = stringHash(pathCtx.paramKeys[i])
+								routeParams.count++
+							} else {
+								// Fall back to dynamic slices for routes with many parameters
+								routeParams.keys = append(routeParams.keys, pathCtx.paramKeys[i])
+								routeParams.values = append(routeParams.values, pathCtx.paramValues[i])
+								routeParams.hashes = append(routeParams.hashes, stringHash(pathCtx.paramKeys[i]))
+							}
+						}
 					}
 
 					// We don't need to store the parameter context in UserData anymore
 					// It's already stored in ctx.paramCache.routeParams
 				}
 
-				// Release the params map back to the pool
-				releaseParamsMap(params)
-
 				// Set up middleware and call the handler
 				r.setupMiddleware(ctx, handlerSlice)
 				return
 			}
 		}
-
-		// Release the params map back to the pool if no match was found
-		releaseParamsMap(params)
 	}
 
-	// Fallback to regex-based routing for backward compatibility
+	// Fallback to optimized byte scanning for routes with parameters
 	methodRoutes, hasMethodRoutes := r.routesByMethod[method]
 	if hasMethodRoutes {
+		// Create a reusable matches slice to avoid allocations
+		matchesSlice := make([]string, 0, 8)
+
 		// Use a more efficient loop with index for better performance
 		for i := 0; i < len(methodRoutes); i++ {
 			route := &methodRoutes[i]
-			matches := route.Regex.FindStringSubmatch(path)
-			if len(matches) > 0 {
+
+			// Try byte scanning first for better performance
+			if matchRouteByteScanning(route, path, &matchesSlice) {
 				// We found a match, handle it
-				r.handleMatchedRoute(ctx, req, *route, matches, path)
+				r.handleMatchedRoute(ctx, req, *route, matchesSlice)
 				return
+			}
+
+			// Fallback to regex for complex cases or backward compatibility
+			if matchesSlice == nil || len(matchesSlice) == 0 {
+				matches := route.Regex.FindStringSubmatch(path)
+				if len(matches) > 0 {
+					// We found a match, handle it
+					r.handleMatchedRoute(ctx, req, *route, matches)
+					return
+				}
 			}
 		}
 	}
 
 	// If we didn't find a match, check for method not allowed
 	// Get allowed methods from the pool
-	allowedMethods := allowedMethodsPool.Get().([]string)
+	allowedMethods := allowedMethodsPool.Get()
 	allowedMethods = allowedMethods[:0]
 	methodNotAllowed := false
 
@@ -1616,6 +2024,9 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 
 	// If we didn't find method not allowed using radix trees, fall back to regex
 	if !methodNotAllowed {
+		// Create a reusable matches slice to avoid allocations
+		matchesSlice := make([]string, 0, 8)
+
 		// Use a more efficient approach to find allowed methods
 		// Pre-allocate a map to track methods we've already seen
 		methodSeen := make(map[string]bool, 8)
@@ -1633,12 +2044,21 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 				continue
 			}
 
-			matches := route.Regex.FindStringSubmatch(path)
-			if len(matches) > 0 {
+			// Try byte scanning first for better performance
+			if matchRouteByteScanning(route, path, &matchesSlice) {
 				// Path matches but method doesn't match
 				methodNotAllowed = true
 				methodSeen[route.Method] = true
 				allowedMethods = append(allowedMethods, route.Method)
+			} else {
+				// Fallback to regex for complex cases or backward compatibility
+				matches := route.Regex.FindStringSubmatch(path)
+				if len(matches) > 0 {
+					// Path matches but method doesn't match
+					methodNotAllowed = true
+					methodSeen[route.Method] = true
+					allowedMethods = append(allowedMethods, route.Method)
+				}
 			}
 		}
 	}
@@ -1679,7 +2099,7 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 			allowHeader = allowedMethods[0]
 		} else {
 			// Use a string builder for multiple methods
-			sb := stringBuilderPool.Get().(*strings.Builder)
+			sb := stringBuilderPool.Get()
 			sb.Reset()
 
 			for i, m := range allowedMethods {
@@ -1707,5 +2127,12 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 	allowedMethodsPool.Put(allowedMethods)
 
 	// No route matched, use the NotFound handler
-	r.setupMiddleware(ctx, []Handler{r.NotFound})
+	// Fast path: directly call NotFound handler without middleware if possible
+	if len(r.middlewareFuncs) == 0 {
+		// No middleware, just call the handler directly
+		r.NotFound(ctx)
+	} else {
+		// Use setupMiddleware with a pre-allocated slice to avoid allocation
+		r.setupMiddleware(ctx, []Handler{r.NotFound})
+	}
 }
