@@ -1,10 +1,13 @@
 # Web Framework Benchmarks
 
-This directory contains benchmark tests for three different web frameworks:
+This directory contains benchmark tests for six different web frameworks:
 
 1. **Ngebut** - A high-performance web framework
 2. **Fiber** - A fast web framework built on top of Fasthttp
 3. **Net/HTTP** - Go's standard HTTP package
+4. **Chi** - A lightweight, idiomatic and composable router for Go
+5. **Echo** - A high performance, extensible, minimalist web framework for Go
+6. **Gin** - A HTTP web framework written in Go
 
 Each framework implements the same basic functionality:
 - A root route that returns a simple string
@@ -15,6 +18,9 @@ Each framework implements the same basic functionality:
 
 ```
 benchmarks/
+├── chi/         # Chi implementation
+├── echo/        # Echo implementation
+├── gin/         # Gin implementation
 ├── gofiber/     # Go Fiber implementation
 ├── nethttp/     # Standard net/http implementation
 └── ngebut/      # Ngebut implementation
@@ -35,7 +41,7 @@ cd benchmarks
 
 This script will:
 1. Check if port 3000 is in use and automatically kill any process using it
-2. Start each server (ngebut, gofiber, nethttp) one by one
+2. Start each server (ngebut, gofiber, nethttp, chi, echo, gin) one by one
 3. Run wrk benchmarks against each endpoint (/, /json, /users/123)
 4. Stop the server after benchmarking
 5. Display a summary table at the end comparing all results side by side

@@ -9,7 +9,7 @@ THREADS=4     # Number of threads
 CONNECTIONS=(100 500 1000)  # Number of connections to test
 PORT=3000     # Port for all servers
 ENDPOINTS=("/" "/json" "/users/123")  # Endpoints to test
-FRAMEWORKS=("ngebut" "gofiber" "nethttp")  # Frameworks to test
+FRAMEWORKS=("ngebut" "gofiber" "nethttp" "chi" "echo" "gin")  # Frameworks to test
 
 # Create a temporary directory for results
 TEMP_DIR=$(mktemp -d)
