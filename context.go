@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/goccy/go-json"
+	"github.com/ryanbekhen/ngebut/internal/pool"
 	"github.com/ryanbekhen/ngebut/internal/unsafe"
+	"github.com/valyala/fastjson"
 	"net"
 	"net/http"
 	"strconv"
@@ -41,42 +43,34 @@ type Ctx struct {
 // and is used as a key for storing parameters in the request context
 
 // contextPool is a pool of Ctx objects for reuse
-var contextPool = sync.Pool{
-	New: func() interface{} {
-		return &Ctx{
-			statusCode:      StatusOK,
-			err:             nil,
-			middlewareStack: make([]MiddlewareFunc, 0, 4), // Pre-allocate capacity for common middleware count
-			fixedCount:      0,                            // No middleware in fixed buffer initially
-			middlewareIndex: -1,
-			paramCache:      cachedParamMap{valid: false, params: nil, routeParams: nil, fixedParams: nil},
-			queryCache:      cachedQueryMap{valid: false, values: nil},
-			userData:        make(map[string]interface{}, 4), // Pre-allocate userData map with increased capacity
-		}
-	},
-}
+var contextPool = pool.New(func() *Ctx {
+	return &Ctx{
+		statusCode:      StatusOK,
+		err:             nil,
+		middlewareStack: make([]MiddlewareFunc, 0, 4), // Pre-allocate capacity for common middleware count
+		fixedCount:      0,                            // No middleware in fixed buffer initially
+		middlewareIndex: -1,
+		paramCache:      cachedParamMap{valid: false, params: nil, routeParams: nil, fixedParams: nil},
+		queryCache:      cachedQueryMap{valid: false, values: nil},
+		userData:        make(map[string]interface{}, 4), // Pre-allocate userData map with increased capacity
+	}
+})
 
 // bufferPool is a pool of bytes.Buffer objects for reuse
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 16384)) // Increased capacity to 16KB to reduce reallocations
-	},
-}
+var bufferPool = pool.New(func() *bytes.Buffer {
+	return bytes.NewBuffer(make([]byte, 0, 16384)) // Increased capacity to 16KB to reduce reallocations
+})
 
 // jsonBufferPool is a dedicated pool of bytes.Buffer objects for JSON serialization
 // Using a separate pool for JSON allows us to optimize buffer sizes for JSON specifically
-var jsonBufferPool = sync.Pool{
-	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 65536)) // 64KB capacity for large JSON responses
-	},
-}
+var jsonBufferPool = pool.New(func() *bytes.Buffer {
+	return bytes.NewBuffer(make([]byte, 0, 65536)) // 64KB capacity for large JSON responses
+})
 
-// bufPool is a pool of bytes.Buffer objects for reuse in JSON encoding
-var bufPool = sync.Pool{
-	New: func() any {
-		return new(bytes.Buffer)
-	},
-}
+// fastjsonParserPool is a pool of fastjson parsers for reuse
+var fastjsonParserPool = pool.New(func() *fastjson.Parser {
+	return &fastjson.Parser{}
+})
 
 // Pre-allocated error message for JSON encoding errors
 var jsonEncodingErr = errors.New("JSON encoding error")
@@ -251,7 +245,7 @@ func (c *Ctx) Next() {
 // Returns:
 //   - A properly initialized *Ctx object ready for request processing
 func GetContext(w http.ResponseWriter, r *http.Request) *Ctx {
-	ctx := contextPool.Get().(*Ctx)
+	ctx := contextPool.Get()
 	ctx.Writer = NewResponseWriter(w)
 	ctx.Request = NewRequest(r)
 	return ctx
@@ -268,7 +262,7 @@ func GetContext(w http.ResponseWriter, r *http.Request) *Ctx {
 // Returns:
 //   - A properly initialized *Ctx object ready for request processing
 func getContextFromRequest(w http.ResponseWriter, r *Request) *Ctx {
-	ctx := contextPool.Get().(*Ctx)
+	ctx := contextPool.Get()
 	ctx.Writer = NewResponseWriter(w)
 	ctx.Request = r
 
@@ -1106,7 +1100,7 @@ func (c *Ctx) String(format string, values ...interface{}) {
 			}
 
 			// For larger strings, use a buffer from the pool
-			buf := bufferPool.Get().(*bytes.Buffer)
+			buf := bufferPool.Get()
 			buf.Reset()
 
 			// Ensure the buffer has enough capacity
@@ -1137,7 +1131,7 @@ func (c *Ctx) String(format string, values ...interface{}) {
 		c.Writer.WriteHeader(c.statusCode)
 
 		// Get a buffer from the pool
-		buf := bufferPool.Get().(*bytes.Buffer)
+		buf := bufferPool.Get()
 		buf.Reset()
 
 		// Use Fprintf for formatted strings
@@ -1209,7 +1203,7 @@ func (c *Ctx) JSON(obj interface{}) {
 		}
 
 		// For larger strings, use a buffer from the pool
-		buf := jsonBufferPool.Get().(*bytes.Buffer)
+		buf := jsonBufferPool.Get()
 		buf.Reset()
 
 		// Ensure the buffer has enough capacity
@@ -1263,7 +1257,7 @@ func (c *Ctx) JSON(obj interface{}) {
 
 	// For more complex objects, use json.Encoder directly to avoid allocations
 	// Get a buffer from the pool
-	buf := jsonBufferPool.Get().(*bytes.Buffer)
+	buf := jsonBufferPool.Get()
 	buf.Reset()
 
 	// Use json.Encoder to write directly to the buffer
@@ -1287,6 +1281,43 @@ func (c *Ctx) JSON(obj interface{}) {
 
 	// Return the buffer to the pool
 	jsonBufferPool.Put(buf)
+}
+
+// ParseJSON parses a JSON string using fastjson and returns the parsed value.
+// It uses a pool of parsers for better performance.
+//
+// Parameters:
+//   - jsonStr: The JSON string to parse
+//
+// Returns:
+//   - The parsed JSON value, or nil if there was an error
+//   - Any error that occurred during parsing
+func (c *Ctx) ParseJSON(jsonStr string) (*fastjson.Value, error) {
+	// Get a parser from the pool
+	parser := fastjsonParserPool.Get()
+	defer fastjsonParserPool.Put(parser)
+
+	// Parse the JSON string
+	return parser.Parse(jsonStr)
+}
+
+// ParseJSONBody parses the request body as JSON using fastjson.
+// It uses a pool of parsers for better performance.
+//
+// Returns:
+//   - The parsed JSON value, or nil if there was an error
+//   - Any error that occurred during parsing
+func (c *Ctx) ParseJSONBody() (*fastjson.Value, error) {
+	if c.Request.Body == nil {
+		return nil, errors.New("request body is nil")
+	}
+
+	// Get a parser from the pool
+	parser := fastjsonParserPool.Get()
+	defer fastjsonParserPool.Put(parser)
+
+	// Parse the JSON body
+	return parser.ParseBytes(c.Request.Body)
 }
 
 // Pre-allocated content type for HTML responses to avoid allocations
@@ -1329,7 +1360,7 @@ func (c *Ctx) HTML(html string) {
 	}
 
 	// For larger strings, use a buffer from the pool
-	buf := bufferPool.Get().(*bytes.Buffer)
+	buf := bufferPool.Get()
 	buf.Reset()
 
 	// Ensure the buffer has enough capacity to avoid reallocations
@@ -1373,7 +1404,7 @@ func (c *Ctx) Data(contentType string, data []byte) {
 
 	// For larger data, use a buffer from the pool to avoid multiple small writes
 	// This reduces allocations and improves performance
-	buf := bufferPool.Get().(*bytes.Buffer)
+	buf := bufferPool.Get()
 	buf.Reset()
 
 	// Ensure the buffer has enough capacity to avoid reallocations

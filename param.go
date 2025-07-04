@@ -1,7 +1,7 @@
 package ngebut
 
 import (
-	"sync"
+	"github.com/ryanbekhen/ngebut/internal/pool"
 )
 
 // paramKey is a type for URL parameter keys to avoid string allocations in context
@@ -58,15 +58,13 @@ func (p *Params) Reset() {
 }
 
 // paramsPool is a pool of Params structs for reuse
-var paramsPool = sync.Pool{
-	New: func() interface{} {
-		return &Params{}
-	},
-}
+var paramsPool = pool.New(func() *Params {
+	return &Params{}
+})
 
 // getParams gets a Params struct from the pool
 func getParams() *Params {
-	return paramsPool.Get().(*Params)
+	return paramsPool.Get()
 }
 
 // releaseParams returns a Params struct to the pool
@@ -76,15 +74,13 @@ func releaseParams(p *Params) {
 }
 
 // paramMap is a reusable map for URL parameters
-var paramMapPool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]string, 8) // Pre-allocate with capacity for 8 params
-	},
-}
+var paramMapPool = pool.New(func() map[string]string {
+	return make(map[string]string, 8) // Pre-allocate with capacity for 8 params
+})
 
 // getParamMap gets a parameter map from the pool
 func getParamMap() map[string]string {
-	return paramMapPool.Get().(map[string]string)
+	return paramMapPool.Get()
 }
 
 // releaseParamMap returns a parameter map to the pool
@@ -153,20 +149,18 @@ func (ps *paramSlice) Set(key, value string) {
 }
 
 // paramSlicePool is a pool of parameter slices for reuse
-var paramSlicePool = sync.Pool{
-	New: func() interface{} {
-		// Create a new paramSlice with pre-allocated entries
-		// Most routes have fewer than 8 parameters, so this is a good balance
-		// Pre-allocate the entries slice with capacity for common routes
-		return &paramSlice{
-			entries: make([]paramEntry, 0, 32), // Increased capacity to further reduce reallocations
-		}
-	},
-}
+var paramSlicePool = pool.New(func() *paramSlice {
+	// Create a new paramSlice with pre-allocated entries
+	// Most routes have fewer than 8 parameters, so this is a good balance
+	// Pre-allocate the entries slice with capacity for common routes
+	return &paramSlice{
+		entries: make([]paramEntry, 0, 32), // Increased capacity to further reduce reallocations
+	}
+})
 
 // getParamSlice gets a parameter slice from the pool
 func getParamSlice() *paramSlice {
-	return paramSlicePool.Get().(*paramSlice)
+	return paramSlicePool.Get()
 }
 
 // releaseParamSlice returns a parameter slice to the pool
@@ -280,20 +274,18 @@ func (rp *routeParams) Reset() {
 }
 
 // routeParamsPool is a pool of routeParams structs for reuse
-var routeParamsPool = sync.Pool{
-	New: func() interface{} {
-		return &routeParams{
-			keys:   make([]string, 0, 32), // Increased capacity to reduce reallocations
-			values: make([]string, 0, 32), // Increased capacity to reduce reallocations
-			hashes: make([]uint32, 0, 32), // Pre-allocate hash codes slice with same capacity
-			count:  0,
-		}
-	},
-}
+var routeParamsPool = pool.New(func() *routeParams {
+	return &routeParams{
+		keys:   make([]string, 0, 32), // Increased capacity to reduce reallocations
+		values: make([]string, 0, 32), // Increased capacity to reduce reallocations
+		hashes: make([]uint32, 0, 32), // Pre-allocate hash codes slice with same capacity
+		count:  0,
+	}
+})
 
 // getRouteParams gets a routeParams struct from the pool
 func getRouteParams() *routeParams {
-	return routeParamsPool.Get().(*routeParams)
+	return routeParamsPool.Get()
 }
 
 // releaseRouteParams returns a routeParams struct to the pool

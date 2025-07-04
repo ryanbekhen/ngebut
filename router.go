@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"github.com/ryanbekhen/ngebut/internal/filebuffer"
 	"github.com/ryanbekhen/ngebut/internal/filecache"
+	"github.com/ryanbekhen/ngebut/internal/pool"
 	"github.com/ryanbekhen/ngebut/internal/radix"
 	"github.com/ryanbekhen/ngebut/internal/unsafe"
 	"io"
 	"mime"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -31,33 +33,25 @@ type route struct {
 // middlewareStackPool is a pool of middleware stacks for reuse
 // This pool helps reduce memory allocations by reusing middleware stacks
 // instead of creating new ones for each request.
-var middlewareStackPool = sync.Pool{
-	New: func() interface{} {
-		// Create a middleware stack with a larger initial capacity to reduce allocations
-		return make([]MiddlewareFunc, 0, 32)
-	},
-}
+var middlewareStackPool = pool.New(func() []MiddlewareFunc {
+	// Create a middleware stack with a larger initial capacity to reduce allocations
+	return make([]MiddlewareFunc, 0, 32)
+})
 
 // routeSegmentPool is a pool for route segments to reduce allocations
-var routeSegmentPool = sync.Pool{
-	New: func() interface{} {
-		return make([]string, 0, 8)
-	},
-}
+var routeSegmentPool = pool.New(func() []string {
+	return make([]string, 0, 8)
+})
 
 // stringBuilderPool is a pool for string builders to reduce allocations
-var stringBuilderPool = sync.Pool{
-	New: func() interface{} {
-		return new(strings.Builder)
-	},
-}
+var stringBuilderPool = pool.New(func() *strings.Builder {
+	return new(strings.Builder)
+})
 
 // allowedMethodsPool is a pool for allowed methods slices to reduce allocations
-var allowedMethodsPool = sync.Pool{
-	New: func() interface{} {
-		return make([]string, 0, 8)
-	},
-}
+var allowedMethodsPool = pool.New(func() []string {
+	return make([]string, 0, 8)
+})
 
 // Router is an HTTP request router.
 type Router struct {
@@ -66,6 +60,10 @@ type Router struct {
 	routeTrees      map[string]*radix.Tree // Radix trees indexed by method for faster lookup
 	middlewareFuncs []MiddlewareFunc
 	NotFound        Handler
+
+	// Cache for compiled middleware chains to avoid repeated compilation
+	// The key is a hash of the middleware chain and the handler
+	middlewareCache sync.Map // map[uint64]Handler
 }
 
 // NewRouter creates a new Router.
@@ -104,12 +102,12 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 
 	if strings.Contains(pattern, ":") || strings.Contains(pattern, "*") {
 		// Get a string builder from the pool
-		sb := stringBuilderPool.Get().(*strings.Builder)
+		sb := stringBuilderPool.Get()
 		sb.Reset()
 		defer stringBuilderPool.Put(sb)
 
 		// Get a segments slice from the pool
-		segments := routeSegmentPool.Get().([]string)
+		segments := routeSegmentPool.Get()
 		segments = segments[:0]
 		defer routeSegmentPool.Put(segments)
 
@@ -1298,30 +1296,9 @@ type paramContextReleaser struct {
 }
 
 // releaseParamContextPool is a pool of paramContextReleaser objects for reuse
-var releaseParamContextPool = sync.Pool{
-	New: func() interface{} {
-		return &paramContextReleaser{}
-	},
-}
-
-// getParamsMap gets a parameter map from the pool
-// This uses the paramMapPool from param.go to avoid duplication
-func getParamsMap() map[string]string {
-	return getParamMap()
-}
-
-// releaseParamsMap returns a parameter map to the pool
-// This uses the paramMapPool from param.go to avoid duplication
-func releaseParamsMap(m map[string]string) {
-	releaseParamMap(m)
-}
-
-// getParamContextReleaser gets a paramContextReleaser from the pool and initializes it
-func getParamContextReleaser(paramCtx *paramSlice) *paramContextReleaser {
-	releaser := releaseParamContextPool.Get().(*paramContextReleaser)
-	releaser.paramCtx = paramCtx
-	return releaser
-}
+var releaseParamContextPool = pool.New(func() *paramContextReleaser {
+	return &paramContextReleaser{}
+})
 
 // release releases the parameter context and returns the releaser to the pool
 func (r *paramContextReleaser) release() {
@@ -1443,6 +1420,30 @@ func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches
 	r.setupMiddleware(ctx, route.Handlers)
 }
 
+// generateMiddlewareHash generates a hash for a middleware chain and handler
+// This is used as a key for the middleware cache
+func (r *Router) generateMiddlewareHash(middleware []Middleware, handler Handler) uint64 {
+	// Use FNV-1a hash algorithm
+	h := uint64(14695981039346656037) // FNV offset basis
+
+	// Hash the global middleware functions
+	for _, m := range middleware {
+		// Get the pointer value of the middleware function
+		ptr := reflect.ValueOf(m).Pointer()
+
+		// Mix the pointer into the hash
+		h ^= uint64(ptr)
+		h *= 1099511628211 // FNV prime
+	}
+
+	// Hash the handler function
+	handlerPtr := reflect.ValueOf(handler).Pointer()
+	h ^= uint64(handlerPtr)
+	h *= 1099511628211 // FNV prime
+
+	return h
+}
+
 // setupMiddleware sets up the middleware stack for a request
 func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 	// Pre-calculate counts to avoid repeated len() calls
@@ -1461,6 +1462,9 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 	// Fast path: use compile-time middleware chaining for better performance
 	// This avoids all allocations and dynamic dispatch overhead
 	if globalMiddlewareCount > 0 {
+		// Get the final handler
+		finalHandler := handlers[handlerCount-1]
+
 		// Create a slice to hold all middleware
 		allMiddleware := make([]Middleware, 0, globalMiddlewareCount+handlerCount-1)
 
@@ -1476,11 +1480,21 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 			}
 		}
 
-		// Get the final handler
-		finalHandler := handlers[handlerCount-1]
+		// Generate a hash for this middleware chain and handler
+		hash := r.generateMiddlewareHash(allMiddleware, finalHandler)
+
+		// Check if we have a cached compiled handler
+		if cachedHandler, ok := r.middlewareCache.Load(hash); ok {
+			// Use the cached handler
+			cachedHandler.(Handler)(ctx)
+			return
+		}
 
 		// Create a compiled handler that executes all middleware and the final handler
 		compiledHandler := CompileMiddleware(finalHandler, allMiddleware...)
+
+		// Cache the compiled handler for future use
+		r.middlewareCache.Store(hash, compiledHandler)
 
 		// Execute the compiled handler
 		compiledHandler(ctx)
@@ -1493,6 +1507,9 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 		handlers[0](ctx)
 		return
 	} else {
+		// Get the final handler
+		finalHandler := handlers[handlerCount-1]
+
 		// Create a slice to hold route handlers as middleware
 		routeMiddleware := make([]Middleware, 0, handlerCount-1)
 
@@ -1501,15 +1518,24 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 			routeMiddleware = append(routeMiddleware, Middleware(handlers[i]))
 		}
 
-		// Get the final handler
-		finalHandler := handlers[handlerCount-1]
+		// Generate a hash for this middleware chain and handler
+		hash := r.generateMiddlewareHash(routeMiddleware, finalHandler)
+
+		// Check if we have a cached compiled handler
+		if cachedHandler, ok := r.middlewareCache.Load(hash); ok {
+			// Use the cached handler
+			cachedHandler.(Handler)(ctx)
+			return
+		}
 
 		// Create a compiled handler that executes all middleware and the final handler
 		compiledHandler := CompileMiddleware(finalHandler, routeMiddleware...)
 
+		// Cache the compiled handler for future use
+		r.middlewareCache.Store(hash, compiledHandler)
+
 		// Execute the compiled handler
 		compiledHandler(ctx)
-		return
 	}
 
 	// Legacy path: fall back to dynamic middleware for backward compatibility
@@ -1563,7 +1589,7 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 		ctx.middlewareStack = ctx.middlewareStack[:totalMiddleware]
 	} else {
 		// Get a middleware stack from the pool
-		stack := middlewareStackPool.Get().([]MiddlewareFunc)
+		stack := middlewareStackPool.Get()
 
 		if cap(stack) >= totalMiddleware {
 			// Reuse the stack with the right size
@@ -1574,7 +1600,7 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 
 			// Get another stack from the pool - we've increased the default capacity,
 			// so this should be rare
-			stack = middlewareStackPool.Get().([]MiddlewareFunc)
+			stack = middlewareStackPool.Get()
 
 			if cap(stack) >= totalMiddleware {
 				// Use this stack if it's big enough
@@ -1819,7 +1845,7 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 
 	// If we didn't find a match, check for method not allowed
 	// Get allowed methods from the pool
-	allowedMethods := allowedMethodsPool.Get().([]string)
+	allowedMethods := allowedMethodsPool.Get()
 	allowedMethods = allowedMethods[:0]
 	methodNotAllowed := false
 
@@ -1902,7 +1928,7 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 			allowHeader = allowedMethods[0]
 		} else {
 			// Use a string builder for multiple methods
-			sb := stringBuilderPool.Get().(*strings.Builder)
+			sb := stringBuilderPool.Get()
 			sb.Reset()
 
 			for i, m := range allowedMethods {

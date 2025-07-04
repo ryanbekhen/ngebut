@@ -293,7 +293,7 @@ func TestMiddlewareStackPool(t *testing.T) {
 	assert := assert.New(t)
 
 	// Get a stack from the pool
-	stack := middlewareStackPool.Get().([]MiddlewareFunc)
+	stack := middlewareStackPool.Get()
 	assert.NotNil(stack, "middlewareStackPool.Get() returned nil")
 
 	// Reset the stack to ensure it's empty
@@ -315,7 +315,7 @@ func TestMiddlewareStackPool(t *testing.T) {
 	middlewareStackPool.Put(stack)
 
 	// Get another stack from the pool (might be the same one)
-	stack2 := middlewareStackPool.Get().([]MiddlewareFunc)
+	stack2 := middlewareStackPool.Get()
 	assert.NotNil(stack2, "middlewareStackPool.Get() returned nil on second call")
 
 	// Reset the stack to ensure it's empty

@@ -21,12 +21,8 @@ func TestParamKey(t *testing.T) {
 // TestParamMapPool tests the paramMapPool
 func TestParamMapPool(t *testing.T) {
 	// Get a map from the pool
-	m1 := paramMapPool.Get()
-	assert.NotNil(t, m1, "paramMapPool.Get() should not return nil")
-
-	// Check that it's a map[string]string
-	paramMap, ok := m1.(map[string]string)
-	assert.True(t, ok, "paramMapPool.Get() should return a map[string]string")
+	paramMap := paramMapPool.Get()
+	assert.NotNil(t, paramMap, "paramMapPool.Get() should not return nil")
 
 	// Check that the map is empty
 	assert.Empty(t, paramMap, "map from pool should be empty")
@@ -35,12 +31,8 @@ func TestParamMapPool(t *testing.T) {
 	paramMapPool.Put(paramMap)
 
 	// Get another map from the pool
-	m2 := paramMapPool.Get()
-	assert.NotNil(t, m2, "paramMapPool.Get() should not return nil on second call")
-
-	// Check that it's a map[string]string
-	paramMap2, ok := m2.(map[string]string)
-	assert.True(t, ok, "paramMapPool.Get() should return a map[string]string")
+	paramMap2 := paramMapPool.Get()
+	assert.NotNil(t, paramMap2, "paramMapPool.Get() should not return nil on second call")
 
 	// Check that the map is empty
 	assert.Empty(t, paramMap2, "map from pool should be empty")
