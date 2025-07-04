@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/evanphx/wildcat"
+	"github.com/ryanbekhen/ngebut/internal/pool"
 	internalunsafe "github.com/ryanbekhen/ngebut/internal/unsafe"
+	"github.com/valyala/bytebufferpool"
 )
 
 // Constants for HTTP parsing
@@ -24,34 +26,26 @@ var (
 // Object pools for reusing frequently created objects
 var (
 	// parserPool reuses HTTP parsers
-	parserPool = sync.Pool{
-		New: func() interface{} {
-			return wildcat.NewHTTPParser()
-		},
-	}
+	parserPool = pool.New(func() *wildcat.HTTPParser {
+		return wildcat.NewHTTPParser()
+	})
 
 	// readerPool reuses bufio.Reader objects
-	readerPool = sync.Pool{
-		New: func() interface{} {
-			return bufio.NewReaderSize(nil, 16384) // Increased to 16KB for better performance
-		},
-	}
+	readerPool = pool.New(func() *bufio.Reader {
+		return bufio.NewReaderSize(nil, 16384) // Increased to 16KB for better performance
+	})
 
 	// bytesReaderPool reuses bytes.Reader objects
-	bytesReaderPool = sync.Pool{
-		New: func() interface{} {
-			return bytes.NewReader(nil)
-		},
-	}
+	bytesReaderPool = pool.New(func() *bytes.Reader {
+		return bytes.NewReader(nil)
+	})
 
 	// bodyReaderPool reuses io.ReadCloser objects for request bodies
-	bodyReaderPool = sync.Pool{
-		New: func() interface{} {
-			return &bodyReader{
-				reader: bytes.NewReader(nil),
-			}
-		},
-	}
+	bodyReaderPool = pool.New(func() *bodyReader {
+		return &bodyReader{
+			reader: bytes.NewReader(nil),
+		}
+	})
 
 	// Common status codes as byte slices to avoid conversions
 	statusCodeBytes = make(map[int][]byte)
@@ -91,7 +85,7 @@ func (b *bodyReader) Reset(data []byte) {
 
 // GetBodyReader returns a reusable io.ReadCloser for request bodies
 func GetBodyReader(data []byte) io.ReadCloser {
-	br := bodyReaderPool.Get().(*bodyReader)
+	br := bodyReaderPool.Get()
 	br.Reset(data)
 	return br
 }
@@ -105,7 +99,7 @@ func ReleaseBodyReader(rc io.ReadCloser) {
 
 // GetReader returns a reusable bufio.Reader
 func GetReader() *bufio.Reader {
-	return readerPool.Get().(*bufio.Reader)
+	return readerPool.Get()
 }
 
 // ReleaseReader returns a bufio.Reader to the pool
@@ -116,7 +110,7 @@ func ReleaseReader(r *bufio.Reader) {
 
 // GetBytesReader returns a reusable bytes.Reader
 func GetBytesReader() *bytes.Reader {
-	return bytesReaderPool.Get().(*bytes.Reader)
+	return bytesReaderPool.Get()
 }
 
 // ReleaseBytesReader returns a bytes.Reader to the pool
@@ -138,7 +132,7 @@ type Header map[string][]string
 type Codec struct {
 	Parser        *wildcat.HTTPParser
 	ContentLength int
-	Buf           []byte
+	Buf           *bytebufferpool.ByteBuffer
 	Router        interface{} // Using interface{} to avoid cyclic imports
 }
 
@@ -487,7 +481,7 @@ func parseChunkedBodyFallback(data []byte) ([]byte, error) {
 	defer ReleaseReader(reader)
 
 	// Get a bytes reader from the pool
-	bytesReader := bytesReaderPool.Get().(*bytes.Reader)
+	bytesReader := bytesReaderPool.Get()
 	bytesReader.Reset(data)
 	defer bytesReaderPool.Put(bytesReader)
 
@@ -571,7 +565,7 @@ func (hc *Codec) ResetParser() {
 	if hc.Parser != nil {
 		parserPool.Put(hc.Parser)
 	}
-	hc.Parser = parserPool.Get().(*wildcat.HTTPParser)
+	hc.Parser = parserPool.Get()
 }
 
 // Reset resets the HTTP codec.
@@ -580,21 +574,21 @@ func (hc *Codec) Reset() {
 	hc.ResetParser()
 
 	// Clear the buffer
-	hc.Buf = hc.Buf[:0]
+	if hc.Buf != nil {
+		hc.Buf.Reset()
+		ResponseBufferPool.Put(hc.Buf)
+		hc.Buf = nil
+	}
 
 	// Ensure we have a valid parser
 	if hc.Parser == nil {
-		hc.Parser = parserPool.Get().(*wildcat.HTTPParser)
+		hc.Parser = parserPool.Get()
 	}
 }
 
-// ResponseBufferPool is a pool of byte slices for response buffers.
-var ResponseBufferPool = sync.Pool{
-	New: func() interface{} {
-		// Start with a larger buffer to reduce reallocations
-		return make([]byte, 0, 32768) // Increased to 32KB for better performance
-	},
-}
+// ResponseBufferPool is a pool of byte buffers for response buffers.
+// Using valyala's bytebufferpool for better performance
+var ResponseBufferPool bytebufferpool.Pool
 
 // Common header constants to avoid allocations
 var (
@@ -672,174 +666,88 @@ func getDateHeader() []byte {
 
 // WriteResponse writes an HTTP response to the codec's buffer.
 func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
-	// Get a more accurate estimate of the response size
-	estimatedSize := EstimateResponseSize(statusCode, header, body)
-
-	// Get buffer from pool if needed - optimized buffer management
-	var buf []byte
-	if cap(hc.Buf) < estimatedSize {
-		// Return current buffer to pool if it exists and is worth pooling
-		if cap(hc.Buf) > 0 && cap(hc.Buf) <= 64*1024 { // Increased threshold to 64KB
-			ResponseBufferPool.Put(hc.Buf[:0])
-		}
-
+	// If we don't have a buffer or it's too small, get a new one
+	if hc.Buf == nil {
 		// Get a buffer from the pool
-		poolBuf := ResponseBufferPool.Get().([]byte)
-		if cap(poolBuf) < estimatedSize {
-			// If the pool buffer is too small, create a new one with more capacity
-			// Add extra capacity to reduce future reallocations
-			newCap := estimatedSize + (estimatedSize / 4) // Add 25% extra capacity
-			ResponseBufferPool.Put(poolBuf[:0])
-			buf = make([]byte, 0, newCap)
-		} else {
-			buf = poolBuf[:0]
-		}
+		hc.Buf = ResponseBufferPool.Get()
 	} else {
-		// Reuse existing buffer
-		buf = hc.Buf[:0]
+		// Reset the existing buffer
+		hc.Buf.Reset()
 	}
 
-	// Pre-calculate the total size needed for the initial part of the response
-	initialSize := len(httpVersion) + 4 + len(StatusText(statusCode)) + len(crlfBytes) + len(getDateHeader())
-
-	// Ensure we have enough capacity for the initial part
-	if cap(buf)-len(buf) < initialSize {
-		newCap := initialSize + estimatedSize
-		newBuf := make([]byte, len(buf), newCap)
-		copy(newBuf, buf)
-		buf = newBuf
-	}
+	// ByteBuffer will automatically grow as needed
 
 	// Write HTTP response - use pre-computed byte slices for common parts
-	buf = append(buf, httpVersion...)
+	hc.Buf.Write(httpVersion)
 
 	// Use pre-computed status code bytes if available
 	if codeBytes, ok := statusCodeBytes[statusCode]; ok {
-		buf = append(buf, codeBytes...)
+		hc.Buf.Write(codeBytes)
 	} else {
-		buf = strconv.AppendInt(buf, int64(statusCode), 10)
+		hc.Buf.B = strconv.AppendInt(hc.Buf.B, int64(statusCode), 10)
 	}
 
-	buf = append(buf, ' ')
-	buf = append(buf, StatusText(statusCode)...)
-	buf = append(buf, crlfBytes...)
+	hc.Buf.WriteByte(' ')
+	hc.Buf.WriteString(StatusText(statusCode))
+	hc.Buf.Write(crlfBytes)
 
 	// Add Date header - use cached version to avoid expensive time formatting
-	buf = append(buf, getDateHeader()...)
+	hc.Buf.Write(getDateHeader())
 
-	// Fast path for empty headers (common case)
-	if len(header) == 0 {
-		// Calculate size needed for Content-Length header and body
-		clSize := len(contentLengthPrefix) + 10 + len(doubleCrlfBytes) // 10 is max digits for content length
-		bodySize := len(body)
-
-		// Ensure we have enough capacity
-		if cap(buf)-len(buf) < clSize+bodySize {
-			newCap := len(buf) + clSize + bodySize + 256
-			newBuf := make([]byte, len(buf), newCap)
-			copy(newBuf, buf)
-			buf = newBuf
-		}
-
-		// Add Content-Length header
-		buf = append(buf, contentLengthPrefix...)
-		buf = strconv.AppendInt(buf, int64(len(body)), 10)
-		buf = append(buf, doubleCrlfBytes...)
-
-		// Add body
-		if bodySize > 0 {
-			buf = append(buf, body...)
-		}
-
-		// Store the buffer for writing
-		hc.Buf = buf
-		return
-	}
-
-	// Calculate total size needed for all headers
-	totalHeaderSize := 0
-	for k, values := range header {
-		headerKeySize := len(k) + len(colonSpace)
-		if len(values) == 1 {
-			totalHeaderSize += headerKeySize + len(values[0]) + len(crlfBytes)
-		} else {
-			for _, v := range values {
-				totalHeaderSize += headerKeySize + len(v) + len(crlfBytes)
-			}
-		}
-	}
-
-	// Add size for Content-Length header and body
-	totalHeaderSize += len(contentLengthPrefix) + 10 + len(doubleCrlfBytes) // 10 is max digits for content length
-	totalSize := totalHeaderSize + len(body)
-
-	// Ensure we have enough capacity for all headers and body
-	if cap(buf)-len(buf) < totalSize {
-		newCap := len(buf) + totalSize + 256
-		newBuf := make([]byte, len(buf), newCap)
-		copy(newBuf, buf)
-		buf = newBuf
-	}
-
-	// Add custom headers - no need to check capacity anymore
+	// Add custom headers
 	for k, values := range header {
 		if len(values) == 1 { // Most common case: single value per header
-			buf = append(buf, k...)
-			buf = append(buf, colonSpace...)
-			buf = append(buf, values[0]...)
-			buf = append(buf, crlfBytes...)
+			hc.Buf.WriteString(k)
+			hc.Buf.Write(colonSpace)
+			hc.Buf.WriteString(values[0])
+			hc.Buf.Write(crlfBytes)
 		} else {
 			for _, v := range values {
-				buf = append(buf, k...)
-				buf = append(buf, colonSpace...)
-				buf = append(buf, v...)
-				buf = append(buf, crlfBytes...)
+				hc.Buf.WriteString(k)
+				hc.Buf.Write(colonSpace)
+				hc.Buf.WriteString(v)
+				hc.Buf.Write(crlfBytes)
 			}
 		}
 	}
 
 	// Add Content-Length header
-	buf = append(buf, contentLengthPrefix...)
-	buf = strconv.AppendInt(buf, int64(len(body)), 10)
-	buf = append(buf, doubleCrlfBytes...)
+	hc.Buf.Write(contentLengthPrefix)
+	hc.Buf.B = strconv.AppendInt(hc.Buf.B, int64(len(body)), 10)
+	hc.Buf.Write(doubleCrlfBytes)
 
 	// Add body
 	if len(body) > 0 {
-		buf = append(buf, body...)
+		hc.Buf.Write(body)
 	}
-
-	// Store the buffer for writing
-	hc.Buf = buf
 }
 
 // codecPool is a pool of Codec objects for reuse
-var codecPool = sync.Pool{
-	New: func() interface{} {
-		return &Codec{
-			Parser:        parserPool.Get().(*wildcat.HTTPParser),
-			ContentLength: -1,
-		}
-	},
-}
+var codecPool = pool.New(func() *Codec {
+	return &Codec{
+		Parser:        parserPool.Get(),
+		ContentLength: -1,
+	}
+})
 
 // NewCodec creates a new HTTP codec.
 func NewCodec(router interface{}) *Codec {
 	// Get a codec from the pool
-	codec := codecPool.Get().(*Codec)
+	codec := codecPool.Get()
 
 	// Reset content length
 	codec.ContentLength = -1
 
 	// Ensure we have a valid parser
 	if codec.Parser == nil {
-		codec.Parser = parserPool.Get().(*wildcat.HTTPParser)
+		codec.Parser = parserPool.Get()
 	}
 
 	// Set the router
 	codec.Router = router
 
-	// Clear the buffer
-	codec.Buf = codec.Buf[:0]
+	// Get a new buffer from the pool
+	codec.Buf = ResponseBufferPool.Get()
 
 	return codec
 }

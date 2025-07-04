@@ -1,12 +1,12 @@
 package ngebut
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/goccy/go-json"
 	"github.com/ryanbekhen/ngebut/internal/pool"
 	"github.com/ryanbekhen/ngebut/internal/unsafe"
+	"github.com/valyala/bytebufferpool"
 	"github.com/valyala/fastjson"
 	"net"
 	"net/http"
@@ -56,16 +56,12 @@ var contextPool = pool.New(func() *Ctx {
 	}
 })
 
-// bufferPool is a pool of bytes.Buffer objects for reuse
-var bufferPool = pool.New(func() *bytes.Buffer {
-	return bytes.NewBuffer(make([]byte, 0, 16384)) // Increased capacity to 16KB to reduce reallocations
-})
+// bufferPool is a pool of byte buffers for reuse
+var bufferPool bytebufferpool.Pool
 
-// jsonBufferPool is a dedicated pool of bytes.Buffer objects for JSON serialization
+// jsonBufferPool is a dedicated pool of byte buffers for JSON serialization
 // Using a separate pool for JSON allows us to optimize buffer sizes for JSON specifically
-var jsonBufferPool = pool.New(func() *bytes.Buffer {
-	return bytes.NewBuffer(make([]byte, 0, 65536)) // 64KB capacity for large JSON responses
-})
+var jsonBufferPool bytebufferpool.Pool
 
 // fastjsonParserPool is a pool of fastjson parsers for reuse
 var fastjsonParserPool = pool.New(func() *fastjson.Parser {
@@ -1101,16 +1097,12 @@ func (c *Ctx) String(format string, values ...interface{}) {
 
 			// For larger strings, use a buffer from the pool
 			buf := bufferPool.Get()
-			buf.Reset()
 
-			// Ensure the buffer has enough capacity
-			if buf.Cap() < len(format) {
-				buf.Grow(len(format) - buf.Cap())
-			}
-
+			// ByteBuffer automatically grows as needed
 			buf.Write(unsafe.S2B(format))
+
 			// Use zero-allocation bytes access
-			_, _ = c.Writer.Write(buf.Bytes())
+			_, _ = c.Writer.Write(buf.B)
 			bufferPool.Put(buf)
 			return
 		}
@@ -1204,19 +1196,14 @@ func (c *Ctx) JSON(obj interface{}) {
 
 		// For larger strings, use a buffer from the pool
 		buf := jsonBufferPool.Get()
-		buf.Reset()
 
-		// Ensure the buffer has enough capacity
-		if buf.Cap() < bufSize {
-			buf.Grow(bufSize - buf.Cap())
-		}
-
+		// ByteBuffer automatically grows as needed
 		buf.WriteByte('"')
 		buf.Write(unsafe.S2B(v))
 		buf.WriteByte('"')
 
 		// Write the buffer to the response writer
-		_, _ = c.Writer.Write(buf.Bytes())
+		_, _ = c.Writer.Write(buf.B)
 
 		// Return the buffer to the pool
 		jsonBufferPool.Put(buf)
@@ -1361,19 +1348,12 @@ func (c *Ctx) HTML(html string) {
 
 	// For larger strings, use a buffer from the pool
 	buf := bufferPool.Get()
-	buf.Reset()
 
-	// Ensure the buffer has enough capacity to avoid reallocations
-	if buf.Cap() < len(html) {
-		// If the buffer is too small, grow it
-		buf.Grow(len(html) - buf.Cap())
-	}
-
-	// Write the HTML string to the buffer
+	// ByteBuffer automatically grows as needed
 	buf.Write(unsafe.S2B(html))
 
 	// Write directly from the buffer using zero-allocation bytes access
-	_, _ = c.Writer.Write(buf.Bytes())
+	_, _ = c.Writer.Write(buf.B)
 
 	// Return buffer to pool
 	bufferPool.Put(buf)
@@ -1405,19 +1385,12 @@ func (c *Ctx) Data(contentType string, data []byte) {
 	// For larger data, use a buffer from the pool to avoid multiple small writes
 	// This reduces allocations and improves performance
 	buf := bufferPool.Get()
-	buf.Reset()
 
-	// Ensure the buffer has enough capacity to avoid reallocations
-	if buf.Cap() < len(data) {
-		// If the buffer is too small, grow it
-		buf.Grow(len(data) - buf.Cap())
-	}
-
-	// Write the data to the buffer
+	// ByteBuffer automatically grows as needed
 	buf.Write(data)
 
 	// Write directly from the buffer
-	_, _ = c.Writer.Write(buf.Bytes())
+	_, _ = c.Writer.Write(buf.B)
 
 	// Return buffer to pool
 	bufferPool.Put(buf)

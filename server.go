@@ -251,7 +251,7 @@ func (hs *httpServer) OnTraffic(c gnet.Conn) gnet.Action {
 				defer releaseParserHeaders(parserHeaders)
 				errorMsg := []byte("Bad Request: Form data could not be processed. Please check your form submission.")
 				hc.WriteResponse(StatusBadRequest, parserHeaders, errorMsg)
-				c.Write(hc.Buf)
+				c.Write(hc.Buf.B)
 			}
 
 			// Discard at least 1 byte to avoid getting stuck in a loop
@@ -311,8 +311,8 @@ func (hs *httpServer) OnTraffic(c gnet.Conn) gnet.Action {
 	}
 
 	// Write the response if there's data in the buffer
-	if len(hc.Buf) > 0 {
-		c.Write(hc.Buf)
+	if hc.Buf != nil && hc.Buf.Len() > 0 {
+		c.Write(hc.Buf.B)
 	}
 
 	// Reset the codec for the next request
