@@ -63,12 +63,12 @@ func New(cleanupInterval time.Duration) *Storage {
 }
 
 // valuePool is a pool of byte slices for reuse to reduce memory allocations.
-// It pre-allocates byte slices with a capacity of 512 bytes, which is a reasonable
+// It pre-allocates byte slices with a capacity of 4KB, which is a reasonable
 // size for most values stored in the cache.
 var valuePool = sync.Pool{
 	New: func() interface{} {
-		// Pre-allocate a reasonable size buffer
-		return make([]byte, 0, 512)
+		// Pre-allocate a larger buffer for better performance
+		return make([]byte, 0, 4096)
 	},
 }
 

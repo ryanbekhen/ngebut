@@ -33,7 +33,7 @@ var (
 	// readerPool reuses bufio.Reader objects
 	readerPool = sync.Pool{
 		New: func() interface{} {
-			return bufio.NewReaderSize(nil, 8192) // Increased to 8KB for better performance
+			return bufio.NewReaderSize(nil, 16384) // Increased to 16KB for better performance
 		},
 	}
 
@@ -592,7 +592,7 @@ func (hc *Codec) Reset() {
 var ResponseBufferPool = sync.Pool{
 	New: func() interface{} {
 		// Start with a larger buffer to reduce reallocations
-		return make([]byte, 0, 16384) // Increased to 16KB for better performance
+		return make([]byte, 0, 32768) // Increased to 32KB for better performance
 	},
 }
 

@@ -179,6 +179,14 @@ func releaseParamSlice(ps *paramSlice) {
 // routeParams is a more efficient structure for storing route parameters
 // It uses separate slices for keys and values instead of a map or slice of structs
 type routeParams struct {
+	// Fixed-size array for small number of parameters (most common case)
+	// This avoids allocations for routes with few parameters
+	// Placed first for better cache locality in the common case
+	fixedKeys   [16]string // Increased size to handle more parameters without allocations
+	fixedValues [16]string // Increased size to handle more parameters without allocations
+	count       int        // Number of parameters in fixed arrays
+
+	// Dynamic slices for routes with many parameters (rare case)
 	keys   []string
 	values []string
 }
@@ -186,7 +194,16 @@ type routeParams struct {
 // Get retrieves a parameter value by key
 // Returns the value and a boolean indicating if the key was found
 func (rp *routeParams) Get(key string) (string, bool) {
-	// Linear search for parameters
+	// First check fixed-size arrays (fastest, zero allocation)
+	// Use direct string comparison for small keys (most common case)
+	for i := 0; i < rp.count; i++ {
+		if rp.fixedKeys[i] == key {
+			return rp.fixedValues[i], true
+		}
+	}
+
+	// If not found in fixed arrays, check dynamic slices
+	// Use direct string comparison for better performance
 	for i, k := range rp.keys {
 		if k == key {
 			return rp.values[i], true
@@ -199,7 +216,15 @@ func (rp *routeParams) Get(key string) (string, bool) {
 // If the key already exists, its value is updated
 // If the key doesn't exist, a new entry is added
 func (rp *routeParams) Set(key, value string) {
-	// First check if the key already exists
+	// First check if the key already exists in fixed arrays
+	for i := 0; i < rp.count; i++ {
+		if rp.fixedKeys[i] == key {
+			rp.fixedValues[i] = value
+			return
+		}
+	}
+
+	// Then check dynamic slices
 	for i, k := range rp.keys {
 		if k == key {
 			rp.values[i] = value
@@ -207,13 +232,22 @@ func (rp *routeParams) Set(key, value string) {
 		}
 	}
 
-	// Key doesn't exist, add a new entry
+	// Key doesn't exist, try to add to fixed arrays first
+	if rp.count < len(rp.fixedKeys) {
+		rp.fixedKeys[rp.count] = key
+		rp.fixedValues[rp.count] = value
+		rp.count++
+		return
+	}
+
+	// If fixed arrays are full, add to dynamic slices
 	rp.keys = append(rp.keys, key)
 	rp.values = append(rp.values, value)
 }
 
 // Reset clears all parameters
 func (rp *routeParams) Reset() {
+	rp.count = 0
 	rp.keys = rp.keys[:0]
 	rp.values = rp.values[:0]
 }
@@ -222,8 +256,9 @@ func (rp *routeParams) Reset() {
 var routeParamsPool = sync.Pool{
 	New: func() interface{} {
 		return &routeParams{
-			keys:   make([]string, 0, 4), // Pre-allocate with capacity for common routes
-			values: make([]string, 0, 4), // Pre-allocate with capacity for common routes
+			keys:   make([]string, 0, 32), // Increased capacity to reduce reallocations
+			values: make([]string, 0, 32), // Increased capacity to reduce reallocations
+			count:  0,
 		}
 	},
 }

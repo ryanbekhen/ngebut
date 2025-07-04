@@ -162,21 +162,14 @@ func getRequest(r *http.Request) *Request {
 	req.Proto = r.Proto
 
 	// Handle headers more efficiently
-	if len(r.Header) == 0 {
-		// If there are no headers, just clear the existing header map
-		if req.Header != nil {
-			for k := range *req.Header {
-				delete(*req.Header, k)
-			}
-		}
-	} else {
-		// If there are headers, use NewHeaderFromMap which is optimized
-		// Release the old header if it exists
-		if req.Header != nil {
-			releaseHeader(req.Header)
-		}
-		req.Header = NewHeaderFromMap(r.Header)
+	if req.Header == nil {
+		// If the request doesn't have a header map, create a new one
+		req.Header = NewHeader()
 	}
+
+	// Update the existing header map with values from the request
+	// This avoids allocating a new map
+	UpdateHeaderFromMap(req.Header, r.Header)
 
 	req.Body = body
 	req.ContentLength = r.ContentLength

@@ -1346,28 +1346,83 @@ func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches
 	// Extract URL parameters using precomputed values
 	if route.HasParams {
 		// Get a routeParams struct from the pool (new optimized approach)
-		routeParams := getRouteParams()
-
-		// Store parameters directly in the context's paramCache
-		// This avoids the expensive context.WithValue and req.WithContext operations
-		ctx.paramCache.routeParams = routeParams
+		// Only if we don't already have one in the context
+		var routeParams *routeParams
+		if ctx.paramCache.routeParams != nil {
+			// Reuse the existing routeParams to avoid allocation
+			routeParams = ctx.paramCache.routeParams
+			routeParams.Reset()
+		} else {
+			routeParams = getRouteParams()
+			// Store parameters directly in the context's paramCache
+			// This avoids the expensive context.WithValue and req.WithContext operations
+			ctx.paramCache.routeParams = routeParams
+		}
 		ctx.paramCache.valid = true
 
 		// Extract parameters directly from regex matches using precomputed parameter names
 		// The regex pattern is created to capture each parameter in order
 		paramIndex := 1 // Start from 1 to skip the full match
 
-		// Reset the keys and values slices without allocating
-		// This is safe because we've pre-allocated the slices with capacity for common routes
-		routeParams.Reset()
-
 		// Use the precomputed parameter names to avoid string slicing at runtime
-		for _, paramName := range route.ParamNames {
+		// First try to use fixed-size arrays for parameters (zero allocation path)
+		paramCount := len(route.ParamNames)
+		useFixedArrays := paramCount <= len(routeParams.fixedKeys)
+
+		// Fast path for common case of 1-2 parameters
+		if useFixedArrays && paramCount <= 2 && paramCount > 0 {
+			// Unrolled loop for 1-2 parameters (most common case)
+			// This avoids the loop overhead and bounds checking
 			if paramIndex < len(matches) {
-				// Add directly to the keys and values slices
-				routeParams.keys = append(routeParams.keys, paramName)
-				routeParams.values = append(routeParams.values, matches[paramIndex])
+				// Store parameter name directly (it's already a string, no allocation)
+				routeParams.fixedKeys[0] = route.ParamNames[0]
+
+				// Store parameter value directly (it's already a string, no allocation)
+				routeParams.fixedValues[0] = matches[paramIndex]
+				routeParams.count = 1
 				paramIndex++
+
+				if paramCount == 2 && paramIndex < len(matches) {
+					// Store parameter name directly (it's already a string, no allocation)
+					routeParams.fixedKeys[1] = route.ParamNames[1]
+
+					// Store parameter value directly (it's already a string, no allocation)
+					routeParams.fixedValues[1] = matches[paramIndex]
+					routeParams.count = 2
+				}
+			}
+		} else {
+			// General case for any number of parameters
+			for i, paramName := range route.ParamNames {
+				if paramIndex < len(matches) {
+					if useFixedArrays {
+						// Use fixed-size arrays for small number of parameters (zero allocation)
+						// Store parameter name directly (it's already a string, no allocation)
+						routeParams.fixedKeys[i] = paramName
+
+						// Store parameter value directly (it's already a string, no allocation)
+						routeParams.fixedValues[i] = matches[paramIndex]
+						routeParams.count++
+					} else {
+						// Fall back to dynamic slices for routes with many parameters
+						// Avoid append if possible by pre-allocating slices
+						if i < cap(routeParams.keys) {
+							// If we have enough capacity, just set the values directly
+							if i >= len(routeParams.keys) {
+								// Extend the slices without allocation
+								routeParams.keys = routeParams.keys[:i+1]
+								routeParams.values = routeParams.values[:i+1]
+							}
+							routeParams.keys[i] = paramName
+							routeParams.values[i] = matches[paramIndex]
+						} else {
+							// If we don't have enough capacity, append (this will allocate)
+							routeParams.keys = append(routeParams.keys, paramName)
+							routeParams.values = append(routeParams.values, matches[paramIndex])
+						}
+					}
+					paramIndex++
+				}
 			}
 		}
 
@@ -1556,10 +1611,48 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 					routeParams.Reset()
 
 					// Copy parameters from the radix tree match
-					// Add all parameters to the keys and values slices in one pass
-					for k, v := range params {
-						routeParams.keys = append(routeParams.keys, k)
-						routeParams.values = append(routeParams.values, v)
+					// First try to use fixed-size arrays for parameters (zero allocation path)
+					paramCount := len(params)
+					useFixedArrays := paramCount <= len(routeParams.fixedKeys)
+
+					// Fast path for common case of 1-2 parameters
+					if useFixedArrays && paramCount <= 2 && paramCount > 0 {
+						// Unrolled loop for 1-2 parameters (most common case)
+						// This avoids the loop overhead and bounds checking
+						i := 0
+						for k, v := range params {
+							if i == 0 {
+								routeParams.fixedKeys[0] = k
+								routeParams.fixedValues[0] = v
+								routeParams.count = 1
+								i++
+								// If there's only one parameter, we're done
+								if paramCount == 1 {
+									break
+								}
+							} else if i == 1 {
+								routeParams.fixedKeys[1] = k
+								routeParams.fixedValues[1] = v
+								routeParams.count = 2
+								break
+							}
+						}
+					} else {
+						// General case for any number of parameters
+						i := 0
+						for k, v := range params {
+							if useFixedArrays {
+								// Use fixed-size arrays for small number of parameters (zero allocation)
+								routeParams.fixedKeys[i] = k
+								routeParams.fixedValues[i] = v
+								routeParams.count++
+							} else {
+								// Fall back to dynamic slices for routes with many parameters
+								routeParams.keys = append(routeParams.keys, k)
+								routeParams.values = append(routeParams.values, v)
+							}
+							i++
+						}
 					}
 
 					// We don't need to store the parameter context in UserData anymore

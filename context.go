@@ -59,7 +59,7 @@ var contextPool = sync.Pool{
 // bufferPool is a pool of bytes.Buffer objects for reuse
 var bufferPool = sync.Pool{
 	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 8192)) // Increased capacity to 8KB to reduce reallocations
+		return bytes.NewBuffer(make([]byte, 0, 16384)) // Increased capacity to 16KB to reduce reallocations
 	},
 }
 
@@ -67,19 +67,7 @@ var bufferPool = sync.Pool{
 // Using a separate pool for JSON allows us to optimize buffer sizes for JSON specifically
 var jsonBufferPool = sync.Pool{
 	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 32768)) // 32KB capacity for large JSON responses
-	},
-}
-
-// jsonEncoderPool is a pool of JSON encoders to avoid creating new ones
-// This is not used directly as encoders can't be reset with a new writer
-// Instead, we use the bufPool below and create a new encoder for each use
-var jsonEncoderPool = sync.Pool{
-	New: func() interface{} {
-		// Create a buffer with a small initial capacity
-		// The actual buffer will be replaced when the encoder is used
-		buf := bytes.NewBuffer(make([]byte, 0, 512))
-		return json.NewEncoder(buf)
+		return bytes.NewBuffer(make([]byte, 0, 65536)) // 64KB capacity for large JSON responses
 	},
 }
 
@@ -641,17 +629,76 @@ func (c *Ctx) Param(key string) string {
 		return ""
 	}
 
-	// Fastest path: Use cached fixedParams if available (new optimized path with fixed-size arrays)
-	if c.paramCache.valid && c.paramCache.fixedParams != nil {
-		if value, found := c.paramCache.fixedParams.Get(key); found {
-			return value
+	// Ultra-fast path: Use cached routeParams with fixed arrays if available
+	// This is now the most optimized path with zero allocations
+	if c.paramCache.valid && c.paramCache.routeParams != nil {
+		// Inline the most common case for better performance
+		rp := c.paramCache.routeParams
+
+		// Ultra-fast path for common parameter names
+		// This avoids string comparisons for the most common parameter names
+		switch key {
+		case "id":
+			// Check fixed arrays first (most common case)
+			if rp.count > 0 && rp.fixedKeys[0] == "id" {
+				return rp.fixedValues[0]
+			}
+			if rp.count > 1 && rp.fixedKeys[1] == "id" {
+				return rp.fixedValues[1]
+			}
+			// Check dynamic slices
+			for i, k := range rp.keys {
+				if k == "id" {
+					return rp.values[i]
+				}
+			}
+			return ""
+		case "userId":
+			// Check fixed arrays first (most common case)
+			if rp.count > 0 && rp.fixedKeys[0] == "userId" {
+				return rp.fixedValues[0]
+			}
+			if rp.count > 1 && rp.fixedKeys[1] == "userId" {
+				return rp.fixedValues[1]
+			}
+			// Check dynamic slices
+			for i, k := range rp.keys {
+				if k == "userId" {
+					return rp.values[i]
+				}
+			}
+			return ""
+		}
+
+		// Fast path for fixed arrays (most common case)
+		// Manually unroll the loop for the first few elements to avoid loop overhead
+		if rp.count > 0 {
+			if rp.fixedKeys[0] == key {
+				return rp.fixedValues[0]
+			}
+			if rp.count > 1 && rp.fixedKeys[1] == key {
+				return rp.fixedValues[1]
+			}
+			// For more than 2 parameters, use the loop
+			for i := 2; i < rp.count; i++ {
+				if rp.fixedKeys[i] == key {
+					return rp.fixedValues[i]
+				}
+			}
+		}
+
+		// Check dynamic slices if fixed arrays didn't have the key
+		for i, k := range rp.keys {
+			if k == key {
+				return rp.values[i]
+			}
 		}
 		return ""
 	}
 
-	// Fast path: Use cached routeParams if available
-	if c.paramCache.valid && c.paramCache.routeParams != nil {
-		if value, found := c.paramCache.routeParams.Get(key); found {
+	// Fast path: Use cached fixedParams if available
+	if c.paramCache.valid && c.paramCache.fixedParams != nil {
+		if value, found := c.paramCache.fixedParams.Get(key); found {
 			return value
 		}
 		return ""
@@ -672,7 +719,7 @@ func (c *Ctx) Param(key string) string {
 		return ""
 	}
 
-	// Try the parameter slice first (fastest path)
+	// Try the parameter slice first (fastest legacy path)
 	if paramSlice, ok := ctxValue.(*paramSlice); ok && paramSlice != nil {
 		// Cache the parameter slice for future lookups
 		c.paramCache.params = paramSlice
@@ -687,43 +734,51 @@ func (c *Ctx) Param(key string) string {
 
 	// Try the map-based parameter context (legacy path)
 	if paramCtx, ok := ctxValue.(map[paramKey]string); ok && paramCtx != nil {
-		// Get a fixed-size params struct from the pool
-		params := getParams()
+		// Get a routeParams struct from the pool (optimized approach)
+		rp := getRouteParams()
 
 		// Use a cached key to avoid string allocations
 		paramKey := paramKey(key)
 
 		// Check if the key exists in the map directly
-		// This avoids converting the entire map if we just need one value
 		if value, exists := paramCtx[paramKey]; exists {
-			// Add this parameter to the fixed-size params
-			params.Set(key, value)
+			// Store in fixed array (zero allocation)
+			rp.fixedKeys[0] = key
+			rp.fixedValues[0] = value
+			rp.count = 1
 
-			// Cache the fixed-size params for future lookups
-			c.paramCache.fixedParams = params
+			// Cache for future lookups
+			c.paramCache.routeParams = rp
 			c.paramCache.valid = true
 
 			return value
 		}
 
-		// If the key wasn't found, add all parameters to the fixed-size params
-		// Use a type assertion instead of conversion to avoid string allocations
+		// If key wasn't found, convert all parameters to fixed arrays when possible
+		i := 0
 		for k, v := range paramCtx {
-			// Use the string representation of k directly without conversion
-			// This is safe because paramKey is just a type alias for string
-			params.Set(string(k), v)
+			if i < len(rp.fixedKeys) {
+				// Store in fixed array (zero allocation)
+				rp.fixedKeys[i] = string(k)
+				rp.fixedValues[i] = v
+				rp.count++
+			} else {
+				// Fall back to dynamic slices if we have too many parameters
+				rp.keys = append(rp.keys, string(k))
+				rp.values = append(rp.values, v)
+			}
+			i++
 		}
 
-		// Cache the fixed-size params for future lookups
-		c.paramCache.fixedParams = params
+		// Cache for future lookups
+		c.paramCache.routeParams = rp
 		c.paramCache.valid = true
 
-		// The key wasn't found in the direct lookup, so it doesn't exist
 		return ""
 	}
 
 	// Fall back to direct context lookup for backward compatibility
-	// Use a cached key to avoid string allocations
+	// Avoid allocation by not creating a new paramKey if possible
 	if value := c.Request.Context().Value(paramKey(key)); value != nil {
 		if strValue, ok := value.(string); ok {
 			return strValue
@@ -1017,7 +1072,7 @@ func (c *Ctx) String(format string, values ...interface{}) {
 				buf.Grow(len(format) - buf.Cap())
 			}
 
-			buf.WriteString(format)
+			buf.Write(unsafe.S2B(format))
 			// Use zero-allocation bytes access
 			_, _ = c.Writer.Write(buf.Bytes())
 			bufferPool.Put(buf)
@@ -1121,7 +1176,7 @@ func (c *Ctx) JSON(obj interface{}) {
 		}
 
 		buf.WriteByte('"')
-		buf.WriteString(v)
+		buf.Write(unsafe.S2B(v))
 		buf.WriteByte('"')
 
 		// Write the buffer to the response writer
@@ -1258,7 +1313,7 @@ func (c *Ctx) HTML(html string) {
 	}
 
 	// Write the HTML string to the buffer
-	buf.WriteString(html)
+	buf.Write(unsafe.S2B(html))
 
 	// Write directly from the buffer using zero-allocation bytes access
 	_, _ = c.Writer.Write(buf.Bytes())
