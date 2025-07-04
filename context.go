@@ -635,40 +635,8 @@ func (c *Ctx) Param(key string) string {
 		// Inline the most common case for better performance
 		rp := c.paramCache.routeParams
 
-		// Ultra-fast path for common parameter names
-		// This avoids string comparisons for the most common parameter names
-		switch key {
-		case "id":
-			// Check fixed arrays first (most common case)
-			if rp.count > 0 && rp.fixedKeys[0] == "id" {
-				return rp.fixedValues[0]
-			}
-			if rp.count > 1 && rp.fixedKeys[1] == "id" {
-				return rp.fixedValues[1]
-			}
-			// Check dynamic slices
-			for i, k := range rp.keys {
-				if k == "id" {
-					return rp.values[i]
-				}
-			}
-			return ""
-		case "userId":
-			// Check fixed arrays first (most common case)
-			if rp.count > 0 && rp.fixedKeys[0] == "userId" {
-				return rp.fixedValues[0]
-			}
-			if rp.count > 1 && rp.fixedKeys[1] == "userId" {
-				return rp.fixedValues[1]
-			}
-			// Check dynamic slices
-			for i, k := range rp.keys {
-				if k == "userId" {
-					return rp.values[i]
-				}
-			}
-			return ""
-		}
+		// Skip the special case optimization for specific parameter names
+		// as it's not appropriate for a framework to assume parameter names
 
 		// Fast path for fixed arrays (most common case)
 		// Manually unroll the loop for the first few elements to avoid loop overhead
@@ -679,8 +647,14 @@ func (c *Ctx) Param(key string) string {
 			if rp.count > 1 && rp.fixedKeys[1] == key {
 				return rp.fixedValues[1]
 			}
-			// For more than 2 parameters, use the loop
-			for i := 2; i < rp.count; i++ {
+			if rp.count > 2 && rp.fixedKeys[2] == key {
+				return rp.fixedValues[2]
+			}
+			if rp.count > 3 && rp.fixedKeys[3] == key {
+				return rp.fixedValues[3]
+			}
+			// For more than 4 parameters, use the loop with direct indexing
+			for i := 4; i < rp.count; i++ {
 				if rp.fixedKeys[i] == key {
 					return rp.fixedValues[i]
 				}
@@ -688,8 +662,9 @@ func (c *Ctx) Param(key string) string {
 		}
 
 		// Check dynamic slices if fixed arrays didn't have the key
-		for i, k := range rp.keys {
-			if k == key {
+		// Use direct indexing for better performance
+		for i := 0; i < len(rp.keys); i++ {
+			if rp.keys[i] == key {
 				return rp.values[i]
 			}
 		}
@@ -796,32 +771,42 @@ func (c *Ctx) ensureQueryCache() map[string][]string {
 	}
 
 	// Fast path: if there's no query string, return nil
+	// Use direct field access to avoid function call overhead
 	rawQuery := c.Request.URL.RawQuery
 	if rawQuery == "" {
 		return nil
 	}
 
-	// Use cached query values if available and valid
-	if c.queryCache.valid && c.queryCache.values != nil && c.queryCache.rawQuery == rawQuery {
-		return c.queryCache.values
+	// Ultra-fast path: if the query string hasn't changed and cache is valid, return it
+	// This is the most common case for multiple query parameter accesses in a single request
+	if c.queryCache.valid && c.queryCache.values != nil {
+		// Use direct string comparison for better performance
+		if c.queryCache.rawQuery == rawQuery {
+			return c.queryCache.values
+		}
 	}
 
-	// If the query cache map is nil, pre-allocate it
+	// If the query cache map is nil, pre-allocate it with a reasonable capacity
+	// Most query strings have fewer than 8 parameters
 	if c.queryCache.values == nil {
 		c.queryCache.values = make(map[string][]string, 8) // Pre-allocate with capacity for common query params
 	} else {
-		// Clear existing values
+		// Clear existing values without reallocating the map
+		// This is faster than creating a new map for each request
 		for k := range c.queryCache.values {
 			delete(c.queryCache.values, k)
 		}
 	}
 
 	// Store the raw query string for cache invalidation
+	// This allows us to quickly check if the query string has changed
 	c.queryCache.rawQuery = rawQuery
 
 	// Parse query parameters directly to avoid allocations from URL.Query()
+	// This is much faster than the standard library implementation
 	parseQueryString(rawQuery, c.queryCache.values)
 
+	// Mark the cache as valid to avoid reparsing
 	c.queryCache.valid = true
 	return c.queryCache.values
 }
@@ -834,6 +819,54 @@ func parseQueryString(query string, values map[string][]string) {
 		return
 	}
 
+	// Fast path for simple queries (most common case)
+	// If the query is simple (no special characters except & and =), we can use a faster approach
+	hasSpecialChars := false
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if c == '+' || c == '%' {
+			hasSpecialChars = true
+			break
+		}
+	}
+
+	// For simple queries, use a more optimized parsing approach
+	if !hasSpecialChars {
+		// Process the query string segment by segment
+		// This avoids unnecessary string slicing and function calls
+		start := 0
+		for i := 0; i <= len(query); i++ {
+			// Process at delimiter or end of string
+			if i == len(query) || query[i] == '&' {
+				if i > start {
+					segment := query[start:i]
+					// Find the equals sign
+					equalsPos := -1
+					for j := 0; j < len(segment); j++ {
+						if segment[j] == '=' {
+							equalsPos = j
+							break
+						}
+					}
+
+					// Handle key=value or just key
+					if equalsPos >= 0 {
+						key := segment[:equalsPos]
+						value := segment[equalsPos+1:]
+						// Direct map access is faster than function call
+						values[key] = append(values[key], value)
+					} else {
+						// Key with empty value
+						values[segment] = append(values[segment], "")
+					}
+				}
+				start = i + 1
+			}
+		}
+		return
+	}
+
+	// Fallback to the original implementation for complex queries with special characters
 	// Process the query string character by character
 	key := ""
 	value := ""
@@ -965,6 +998,9 @@ func (c *Ctx) Query(key string) string {
 		return ""
 	}
 
+	// Skip the special case optimization for specific query parameter names
+	// as it's not appropriate for a framework to assume parameter names
+
 	// Return the first value if it exists
 	if vals, exists := values[key]; exists && len(vals) > 0 {
 		return vals[0]
@@ -985,6 +1021,9 @@ func (c *Ctx) QueryArray(key string) []string {
 	if values == nil {
 		return []string{}
 	}
+
+	// Skip the special case optimization for specific query parameter names
+	// as it's not appropriate for a framework to assume parameter names
 
 	// Return all values if they exist
 	if vals, exists := values[key]; exists {

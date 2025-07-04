@@ -1667,11 +1667,19 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 					paramCount := len(pathCtx.params)
 					useFixedArrays := paramCount <= len(routeParams.fixedKeys)
 
-					// Extract parameter keys and values into pre-allocated slices
-					// This avoids map iteration which can be slow
+					// Extract parameter keys and values directly without map iteration
+					// This is much faster than iterating over the map
 					pathCtx.paramKeys = pathCtx.paramKeys[:0]
 					pathCtx.paramValues = pathCtx.paramValues[:0]
 
+					// Pre-allocate slices to avoid append allocations
+					if cap(pathCtx.paramKeys) < len(pathCtx.params) {
+						pathCtx.paramKeys = make([]string, 0, len(pathCtx.params))
+						pathCtx.paramValues = make([]string, 0, len(pathCtx.params))
+					}
+
+					// Process all parameters without assuming specific parameter names
+					// This is more appropriate for a framework that should work with any parameter names
 					for k, v := range pathCtx.params {
 						pathCtx.paramKeys = append(pathCtx.paramKeys, k)
 						pathCtx.paramValues = append(pathCtx.paramValues, v)
