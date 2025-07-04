@@ -635,27 +635,29 @@ func (c *Ctx) Param(key string) string {
 		// Inline the most common case for better performance
 		rp := c.paramCache.routeParams
 
-		// Skip the special case optimization for specific parameter names
-		// as it's not appropriate for a framework to assume parameter names
+		// Compute hash code once for faster comparisons
+		hash := stringHash(key)
 
 		// Fast path for fixed arrays (most common case)
 		// Manually unroll the loop for the first few elements to avoid loop overhead
 		if rp.count > 0 {
-			if rp.fixedKeys[0] == key {
+			// Hash comparison is much faster than string comparison
+			if rp.fixedHashes[0] == hash && rp.fixedKeys[0] == key {
 				return rp.fixedValues[0]
 			}
-			if rp.count > 1 && rp.fixedKeys[1] == key {
+			if rp.count > 1 && rp.fixedHashes[1] == hash && rp.fixedKeys[1] == key {
 				return rp.fixedValues[1]
 			}
-			if rp.count > 2 && rp.fixedKeys[2] == key {
+			if rp.count > 2 && rp.fixedHashes[2] == hash && rp.fixedKeys[2] == key {
 				return rp.fixedValues[2]
 			}
-			if rp.count > 3 && rp.fixedKeys[3] == key {
+			if rp.count > 3 && rp.fixedHashes[3] == hash && rp.fixedKeys[3] == key {
 				return rp.fixedValues[3]
 			}
 			// For more than 4 parameters, use the loop with direct indexing
 			for i := 4; i < rp.count; i++ {
-				if rp.fixedKeys[i] == key {
+				// Hash comparison is much faster than string comparison
+				if rp.fixedHashes[i] == hash && rp.fixedKeys[i] == key {
 					return rp.fixedValues[i]
 				}
 			}
@@ -664,7 +666,8 @@ func (c *Ctx) Param(key string) string {
 		// Check dynamic slices if fixed arrays didn't have the key
 		// Use direct indexing for better performance
 		for i := 0; i < len(rp.keys); i++ {
-			if rp.keys[i] == key {
+			// Hash comparison is much faster than string comparison
+			if rp.hashes[i] == hash && rp.keys[i] == key {
 				return rp.values[i]
 			}
 		}
@@ -1258,48 +1261,32 @@ func (c *Ctx) JSON(obj interface{}) {
 		}
 	}
 
-	// For more complex objects, try to marshal directly first
-	data, err := json.Marshal(obj)
-	if err == nil {
-		// For small data, write directly
-		if len(data) < 256 {
-			_, _ = c.Writer.Write(data)
-			return
-		}
+	// For more complex objects, use json.Encoder directly to avoid allocations
+	// Get a buffer from the pool
+	buf := jsonBufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
 
-		// For larger data, use the dedicated JSON buffer from the pool
-		// This buffer has a larger capacity specifically for JSON responses
-		buf := jsonBufferPool.Get().(*bytes.Buffer)
-		buf.Reset()
-
-		// If data fits in our buffer, use the buffer
-		if len(data) < buf.Cap() {
-			buf.Write(data)
-			_, _ = c.Writer.Write(buf.Bytes())
-		} else {
-			// For very large data that exceeds our buffer capacity,
-			// write directly to the response writer to avoid an extra copy
-			_, _ = c.Writer.Write(data)
-		}
-
-		// Return the buffer to the pool
-		jsonBufferPool.Put(buf)
+	// Use json.Encoder to write directly to the buffer
+	// This avoids the allocation from json.Marshal
+	if err := json.NewEncoder(buf).Encode(obj); err != nil {
+		// Use pre-allocated error message to avoid allocation
+		c.Error(jsonEncodingErr)
 	} else {
-		// Fallback to encoder for complex objects or if Marshal fails
-		// Use the bufPool as described in the optimization
-		buf := bufPool.Get().(*bytes.Buffer)
-		buf.Reset()
+		// Get the buffer bytes
+		data := buf.Bytes()
 
-		if err := json.NewEncoder(buf).Encode(obj); err != nil {
-			// Use pre-allocated error message to avoid allocation
-			c.Error(jsonEncodingErr)
-		} else {
-			_, _ = c.Writer.Write(buf.Bytes())
+		// Remove the trailing newline that json.Encoder adds
+		// This is safe because we know json.Encoder always adds a newline
+		if len(data) > 0 && data[len(data)-1] == '\n' {
+			data = data[:len(data)-1]
 		}
 
-		// Return the buffer to the pool
-		bufPool.Put(buf)
+		// Write the data to the response writer
+		_, _ = c.Writer.Write(data)
 	}
+
+	// Return the buffer to the pool
+	jsonBufferPool.Put(buf)
 }
 
 // Pre-allocated content type for HTML responses to avoid allocations

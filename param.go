@@ -176,6 +176,18 @@ func releaseParamSlice(ps *paramSlice) {
 	paramSlicePool.Put(ps)
 }
 
+// stringHash computes a simple hash code for a string
+// This is a fast, non-cryptographic hash function suitable for string lookups
+// It's based on the FNV-1a hash algorithm
+func stringHash(s string) uint32 {
+	h := uint32(2166136261)
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h
+}
+
 // routeParams is a more efficient structure for storing route parameters
 // It uses separate slices for keys and values instead of a map or slice of structs
 type routeParams struct {
@@ -184,28 +196,35 @@ type routeParams struct {
 	// Placed first for better cache locality in the common case
 	fixedKeys   [16]string // Increased size to handle more parameters without allocations
 	fixedValues [16]string // Increased size to handle more parameters without allocations
+	fixedHashes [16]uint32 // Hash codes for fixed keys to avoid string comparisons
 	count       int        // Number of parameters in fixed arrays
 
 	// Dynamic slices for routes with many parameters (rare case)
 	keys   []string
 	values []string
+	hashes []uint32 // Hash codes for dynamic keys
 }
 
 // Get retrieves a parameter value by key
 // Returns the value and a boolean indicating if the key was found
 func (rp *routeParams) Get(key string) (string, bool) {
+	// Compute hash code once
+	hash := stringHash(key)
+
 	// First check fixed-size arrays (fastest, zero allocation)
-	// Use direct string comparison for small keys (most common case)
+	// Use hash comparison first, then string comparison only if hash matches
 	for i := 0; i < rp.count; i++ {
-		if rp.fixedKeys[i] == key {
+		// Hash comparison is much faster than string comparison
+		if rp.fixedHashes[i] == hash && rp.fixedKeys[i] == key {
 			return rp.fixedValues[i], true
 		}
 	}
 
 	// If not found in fixed arrays, check dynamic slices
-	// Use direct string comparison for better performance
-	for i, k := range rp.keys {
-		if k == key {
+	// Use hash comparison first, then string comparison only if hash matches
+	for i := 0; i < len(rp.keys); i++ {
+		// Hash comparison is much faster than string comparison
+		if rp.hashes[i] == hash && rp.keys[i] == key {
 			return rp.values[i], true
 		}
 	}
@@ -216,17 +235,22 @@ func (rp *routeParams) Get(key string) (string, bool) {
 // If the key already exists, its value is updated
 // If the key doesn't exist, a new entry is added
 func (rp *routeParams) Set(key, value string) {
+	// Compute hash code once
+	hash := stringHash(key)
+
 	// First check if the key already exists in fixed arrays
 	for i := 0; i < rp.count; i++ {
-		if rp.fixedKeys[i] == key {
+		// Hash comparison is much faster than string comparison
+		if rp.fixedHashes[i] == hash && rp.fixedKeys[i] == key {
 			rp.fixedValues[i] = value
 			return
 		}
 	}
 
 	// Then check dynamic slices
-	for i, k := range rp.keys {
-		if k == key {
+	for i := 0; i < len(rp.keys); i++ {
+		// Hash comparison is much faster than string comparison
+		if rp.hashes[i] == hash && rp.keys[i] == key {
 			rp.values[i] = value
 			return
 		}
@@ -236,6 +260,7 @@ func (rp *routeParams) Set(key, value string) {
 	if rp.count < len(rp.fixedKeys) {
 		rp.fixedKeys[rp.count] = key
 		rp.fixedValues[rp.count] = value
+		rp.fixedHashes[rp.count] = hash
 		rp.count++
 		return
 	}
@@ -243,6 +268,7 @@ func (rp *routeParams) Set(key, value string) {
 	// If fixed arrays are full, add to dynamic slices
 	rp.keys = append(rp.keys, key)
 	rp.values = append(rp.values, value)
+	rp.hashes = append(rp.hashes, hash)
 }
 
 // Reset clears all parameters
@@ -250,6 +276,7 @@ func (rp *routeParams) Reset() {
 	rp.count = 0
 	rp.keys = rp.keys[:0]
 	rp.values = rp.values[:0]
+	rp.hashes = rp.hashes[:0]
 }
 
 // routeParamsPool is a pool of routeParams structs for reuse
@@ -258,6 +285,7 @@ var routeParamsPool = sync.Pool{
 		return &routeParams{
 			keys:   make([]string, 0, 32), // Increased capacity to reduce reallocations
 			values: make([]string, 0, 32), // Increased capacity to reduce reallocations
+			hashes: make([]uint32, 0, 32), // Pre-allocate hash codes slice with same capacity
 			count:  0,
 		}
 	},

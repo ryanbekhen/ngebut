@@ -1370,6 +1370,10 @@ func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches
 
 				// Store parameter value directly (it's already a string, no allocation)
 				routeParams.fixedValues[0] = matches[paramIndex]
+
+				// Compute and store hash code for faster lookups
+				routeParams.fixedHashes[0] = stringHash(route.ParamNames[0])
+
 				routeParams.count = 1
 				paramIndex++
 
@@ -1379,6 +1383,10 @@ func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches
 
 					// Store parameter value directly (it's already a string, no allocation)
 					routeParams.fixedValues[1] = matches[paramIndex]
+
+					// Compute and store hash code for faster lookups
+					routeParams.fixedHashes[1] = stringHash(route.ParamNames[1])
+
 					routeParams.count = 2
 				}
 			}
@@ -1393,6 +1401,10 @@ func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches
 
 						// Store parameter value directly (it's already a string, no allocation)
 						routeParams.fixedValues[i] = matches[paramIndex]
+
+						// Compute and store hash code for faster lookups
+						routeParams.fixedHashes[i] = stringHash(paramName)
+
 						routeParams.count++
 					} else {
 						// Fall back to dynamic slices for routes with many parameters
@@ -1403,13 +1415,16 @@ func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches
 								// Extend the slices without allocation
 								routeParams.keys = routeParams.keys[:i+1]
 								routeParams.values = routeParams.values[:i+1]
+								routeParams.hashes = routeParams.hashes[:i+1]
 							}
 							routeParams.keys[i] = paramName
 							routeParams.values[i] = matches[paramIndex]
+							routeParams.hashes[i] = stringHash(paramName)
 						} else {
 							// If we don't have enough capacity, append (this will allocate)
 							routeParams.keys = append(routeParams.keys, paramName)
 							routeParams.values = append(routeParams.values, matches[paramIndex])
+							routeParams.hashes = append(routeParams.hashes, stringHash(paramName))
 						}
 					}
 					paramIndex++
@@ -1442,6 +1457,63 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 		handlers[0](ctx)
 		return
 	}
+
+	// Fast path: use compile-time middleware chaining for better performance
+	// This avoids all allocations and dynamic dispatch overhead
+	if globalMiddlewareCount > 0 {
+		// Create a slice to hold all middleware
+		allMiddleware := make([]Middleware, 0, globalMiddlewareCount+handlerCount-1)
+
+		// Add global middleware
+		for _, m := range r.middlewareFuncs {
+			allMiddleware = append(allMiddleware, m)
+		}
+
+		// Add route handlers except the last one as middleware
+		if handlerCount > 1 {
+			for i := 0; i < handlerCount-1; i++ {
+				allMiddleware = append(allMiddleware, Middleware(handlers[i]))
+			}
+		}
+
+		// Get the final handler
+		finalHandler := handlers[handlerCount-1]
+
+		// Create a compiled handler that executes all middleware and the final handler
+		compiledHandler := CompileMiddleware(finalHandler, allMiddleware...)
+
+		// Execute the compiled handler
+		compiledHandler(ctx)
+		return
+	}
+
+	// If we only have route handlers (no global middleware), we can optimize further
+	if handlerCount == 1 {
+		// Just call the single handler directly
+		handlers[0](ctx)
+		return
+	} else {
+		// Create a slice to hold route handlers as middleware
+		routeMiddleware := make([]Middleware, 0, handlerCount-1)
+
+		// Add all but the last handler as middleware
+		for i := 0; i < handlerCount-1; i++ {
+			routeMiddleware = append(routeMiddleware, Middleware(handlers[i]))
+		}
+
+		// Get the final handler
+		finalHandler := handlers[handlerCount-1]
+
+		// Create a compiled handler that executes all middleware and the final handler
+		compiledHandler := CompileMiddleware(finalHandler, routeMiddleware...)
+
+		// Execute the compiled handler
+		compiledHandler(ctx)
+		return
+	}
+
+	// Legacy path: fall back to dynamic middleware for backward compatibility
+	// This should never be reached with the new implementation, but kept for safety
 
 	// Calculate the total middleware size
 	totalMiddleware := globalMiddlewareCount + handlerCount - 1
@@ -1691,12 +1763,14 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 						// This avoids the loop overhead and bounds checking
 						routeParams.fixedKeys[0] = pathCtx.paramKeys[0]
 						routeParams.fixedValues[0] = pathCtx.paramValues[0]
+						routeParams.fixedHashes[0] = stringHash(pathCtx.paramKeys[0])
 						routeParams.count = 1
 
 						// If there's a second parameter, add it
 						if paramCount == 2 {
 							routeParams.fixedKeys[1] = pathCtx.paramKeys[1]
 							routeParams.fixedValues[1] = pathCtx.paramValues[1]
+							routeParams.fixedHashes[1] = stringHash(pathCtx.paramKeys[1])
 							routeParams.count = 2
 						}
 					} else {
@@ -1706,11 +1780,13 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 								// Use fixed-size arrays for small number of parameters (zero allocation)
 								routeParams.fixedKeys[i] = pathCtx.paramKeys[i]
 								routeParams.fixedValues[i] = pathCtx.paramValues[i]
+								routeParams.fixedHashes[i] = stringHash(pathCtx.paramKeys[i])
 								routeParams.count++
 							} else {
 								// Fall back to dynamic slices for routes with many parameters
 								routeParams.keys = append(routeParams.keys, pathCtx.paramKeys[i])
 								routeParams.values = append(routeParams.values, pathCtx.paramValues[i])
+								routeParams.hashes = append(routeParams.hashes, stringHash(pathCtx.paramKeys[i]))
 							}
 						}
 					}
