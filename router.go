@@ -28,6 +28,11 @@ type route struct {
 	HasParams  bool     // Precomputed flag indicating if the route has parameters
 	ParamCount int      // Precomputed count of parameters in the route
 	ParamNames []string // Precomputed parameter names
+
+	// Fields for optimized byte scanning
+	Segments   []string // Pattern segments for optimized matching
+	IsWildcard []bool   // Whether each segment is a wildcard
+	IsParam    []bool   // Whether each segment is a parameter
 }
 
 // middlewareStackPool is a pool of middleware stacks for reuse
@@ -158,8 +163,8 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 
 	// Extract parameter names
 	var paramNames []string
-	if hasParams {
-		paramNames = make([]string, 0, paramCount)
+	if hasParams || strings.Contains(pattern, "*") {
+		paramNames = make([]string, 0, paramCount+strings.Count(pattern, "*"))
 		start := 0
 		for i := 0; i < len(pattern); i++ {
 			if pattern[i] == ':' {
@@ -175,11 +180,52 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 					// Parameter ends at a slash
 					paramNames = append(paramNames, pattern[start:start+end])
 				}
+			} else if pattern[i] == '*' {
+				// Found a wildcard parameter
+				// Check if it's a standalone * or part of another string
+				if (i == 0 || pattern[i-1] == '/') && (i == len(pattern)-1 || pattern[i+1] == '/') {
+					// Standalone wildcard parameter
+					paramNames = append(paramNames, "*")
+				}
 			}
 		}
 	}
 
 	regex := regexp.MustCompile(regexPattern)
+
+	// Parse pattern into segments for optimized byte scanning
+	segments := make([]string, 0, 8)
+	isWildcard := make([]bool, 0, 8)
+	isParam := make([]bool, 0, 8)
+
+	// Skip leading slash if present
+	startIndex := 0
+	if len(pattern) > 0 && pattern[0] == '/' {
+		startIndex = 1
+	}
+
+	// Split pattern into segments
+	start := startIndex
+	for i := startIndex; i < len(pattern); i++ {
+		if pattern[i] == '/' {
+			if i > start {
+				segment := pattern[start:i]
+				segments = append(segments, segment)
+				isWildcard = append(isWildcard, segment == "*")
+				isParam = append(isParam, len(segment) > 0 && segment[0] == ':')
+			}
+			start = i + 1
+		}
+	}
+
+	// Add the last segment if there is one
+	if start < len(pattern) {
+		segment := pattern[start:]
+		segments = append(segments, segment)
+		isWildcard = append(isWildcard, segment == "*")
+		isParam = append(isParam, len(segment) > 0 && segment[0] == ':')
+	}
+
 	newRoute := route{
 		Pattern:    pattern,
 		Method:     method,
@@ -188,6 +234,9 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 		HasParams:  hasParams,
 		ParamCount: paramCount,
 		ParamNames: paramNames,
+		Segments:   segments,
+		IsWildcard: isWildcard,
+		IsParam:    isParam,
 	}
 
 	// Add to the main routes slice
@@ -352,7 +401,7 @@ func createStaticHandler(prefix, root string, config Static) Handler {
 					fileInfo = indexInfo
 				} else if config.Browse {
 					// Serve directory listing
-					serveDirectoryListing(c, fullPath, filePath, config)
+					serveDirectoryListing(c, fullPath, filePath)
 					return
 				} else {
 					c.Status(StatusForbidden)
@@ -361,7 +410,7 @@ func createStaticHandler(prefix, root string, config Static) Handler {
 				}
 			} else if config.Browse {
 				// No index file specified, serve directory listing
-				serveDirectoryListing(c, fullPath, filePath, config)
+				serveDirectoryListing(c, fullPath, filePath)
 				return
 			} else {
 				c.Status(StatusForbidden)
@@ -669,7 +718,7 @@ func serveFile(c *Ctx, filePath string, fileInfo os.FileInfo, config Static) {
 			config.ModifyResponse(c)
 		}
 
-		// Set content type header
+		// Set the content type header
 		c.Set("Content-Type", contentType)
 
 		// Open the file directly without caching the descriptor
@@ -995,7 +1044,7 @@ func serveFileWithRange(c *Ctx, filePath string, fileInfo os.FileInfo, config St
 }
 
 // serveDirectoryListing serves a directory listing
-func serveDirectoryListing(c *Ctx, dirPath, urlPath string, config Static) {
+func serveDirectoryListing(c *Ctx, dirPath, urlPath string) {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		c.Status(StatusInternalServerError)
@@ -1272,45 +1321,95 @@ func (r *Router) STATIC(prefix, root string, config ...Static) *Router {
 	return r.HandleStatic(prefix, root, config...)
 }
 
-// We're using the paramSlicePool from param_struct.go instead of paramContextPool
-// This reduces allocations and improves performance
-
-// getParamContext gets a parameter slice from the pool
-// This is a compatibility wrapper for the new paramSlice type
-func getParamContext() *paramSlice {
-	return getParamSlice()
-}
-
-// releaseParamContext returns a parameter slice to the pool
-// This is a compatibility wrapper for the new paramSlice type
-func releaseParamContext(ps *paramSlice) {
-	releaseParamSlice(ps)
-}
-
-// releaseParamContextKey is the key used to store the function that releases the parameter context
-type releaseParamContextKey struct{}
-
-// paramContextReleaser is a struct that holds a parameter context to be released
-type paramContextReleaser struct {
-	paramCtx *paramSlice
-}
-
-// releaseParamContextPool is a pool of paramContextReleaser objects for reuse
-var releaseParamContextPool = pool.New(func() *paramContextReleaser {
-	return &paramContextReleaser{}
-})
-
-// release releases the parameter context and returns the releaser to the pool
-func (r *paramContextReleaser) release() {
-	if r.paramCtx != nil {
-		releaseParamContext(r.paramCtx)
-		r.paramCtx = nil
+// matchRouteByteScanning matches a path against a route using byte scanning
+// This is more efficient than regex-based matching for parameter extraction
+// Returns true if the path matches the route and populates the matches slice with parameter values
+func matchRouteByteScanning(route *route, path string, matches *[]string) bool {
+	// Skip leading slash if present
+	pathStartIndex := 0
+	if len(path) > 0 && path[0] == '/' {
+		pathStartIndex = 1
 	}
-	releaseParamContextPool.Put(r)
+
+	// Split path into segments
+	pathSegments := make([]string, 0, 8)
+	start := pathStartIndex
+	for i := pathStartIndex; i < len(path); i++ {
+		if path[i] == '/' {
+			if i > start {
+				pathSegments = append(pathSegments, path[start:i])
+			}
+			start = i + 1
+		}
+	}
+
+	// Add the last segment if there is one
+	if start < len(path) {
+		pathSegments = append(pathSegments, path[start:])
+	}
+
+	// Quick check: if segment counts don't match and there's no wildcard, it can't match
+	if len(pathSegments) != len(route.Segments) {
+		// Check if the route has a wildcard segment that could match multiple path segments
+		hasWildcard := false
+		for _, isWild := range route.IsWildcard {
+			if isWild {
+				hasWildcard = true
+				break
+			}
+		}
+
+		if !hasWildcard {
+			return false
+		}
+	}
+
+	// Reset matches slice and add full path as first match (to mimic regex behavior)
+	*matches = (*matches)[:0]
+	*matches = append(*matches, path)
+
+	// Match segments
+	pathIndex := 0
+	for i, segment := range route.Segments {
+		// Special case for wildcard at the end of the route
+		if route.IsWildcard[i] && i == len(route.Segments)-1 {
+			// Last segment is wildcard - capture all remaining path segments
+			// This works even if there are no more path segments (empty wildcard)
+			wildValue := ""
+			if pathIndex < len(pathSegments) {
+				wildValue = strings.Join(pathSegments[pathIndex:], "/")
+			}
+			*matches = append(*matches, wildValue)
+			return true
+		}
+
+		// If we've run out of path segments, this can only match if all remaining route segments are optional
+		if pathIndex >= len(pathSegments) {
+			return false
+		}
+
+		if route.IsParam[i] {
+			// Parameter segment - capture the value
+			*matches = append(*matches, pathSegments[pathIndex])
+			pathIndex++
+		} else if route.IsWildcard[i] {
+			// Non-terminal wildcard - this is complex and rare, fall back to regex
+			return false
+		} else {
+			// Static segment - must match exactly
+			if segment != pathSegments[pathIndex] {
+				return false
+			}
+			pathIndex++
+		}
+	}
+
+	// All segments matched and we've consumed all path segments
+	return pathIndex == len(pathSegments)
 }
 
 // handleMatchedRoute handles a route that matched the path and method
-func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches []string, path string) {
+func (r *Router) handleMatchedRoute(ctx *Ctx, req *Request, route route, matches []string) {
 	// Extract URL parameters using precomputed values
 	if route.HasParams {
 		// Get a routeParams struct from the pool (new optimized approach)
@@ -1539,15 +1638,11 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 	}
 
 	// Legacy path: fall back to dynamic middleware for backward compatibility
-	// This should never be reached with the new implementation, but kept for safety
+	// This should never be reached with the new implementation but kept for safety
 
 	// Calculate the total middleware size
 	totalMiddleware := globalMiddlewareCount + handlerCount - 1
 	if totalMiddleware <= 0 {
-		// No middleware and no handlers, or just one handler
-		if handlerCount == 1 {
-			handlers[0](ctx)
-		}
 		return
 	}
 
@@ -1556,13 +1651,6 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 	if totalMiddleware <= len(ctx.fixedMiddleware) {
 		// Reset the fixed middleware count
 		ctx.fixedCount = totalMiddleware
-
-		// Copy the global middleware functions directly to the fixed buffer
-		if globalMiddlewareCount > 0 {
-			for i := 0; i < globalMiddlewareCount; i++ {
-				ctx.fixedMiddleware[i] = r.middlewareFuncs[i]
-			}
-		}
 
 		// Add all but the last handler as middleware directly to the fixed buffer
 		if handlerCount > 1 {
@@ -1626,11 +1714,6 @@ func (r *Router) setupMiddleware(ctx *Ctx, handlers []Handler) {
 
 	// Reset the fixed middleware count to indicate we're using the dynamic stack
 	ctx.fixedCount = 0
-
-	// Copy the global middleware functions in one operation if any exist
-	if globalMiddlewareCount > 0 {
-		copy(ctx.middlewareStack[:globalMiddlewareCount], r.middlewareFuncs)
-	}
 
 	// Add all but the last handler as middleware
 	// Use direct indexing for better performance
@@ -1828,17 +1911,31 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 		}
 	}
 
-	// Fallback to regex-based routing for backward compatibility
+	// Fallback to optimized byte scanning for routes with parameters
 	methodRoutes, hasMethodRoutes := r.routesByMethod[method]
 	if hasMethodRoutes {
+		// Create a reusable matches slice to avoid allocations
+		matchesSlice := make([]string, 0, 8)
+
 		// Use a more efficient loop with index for better performance
 		for i := 0; i < len(methodRoutes); i++ {
 			route := &methodRoutes[i]
-			matches := route.Regex.FindStringSubmatch(path)
-			if len(matches) > 0 {
+
+			// Try byte scanning first for better performance
+			if matchRouteByteScanning(route, path, &matchesSlice) {
 				// We found a match, handle it
-				r.handleMatchedRoute(ctx, req, *route, matches, path)
+				r.handleMatchedRoute(ctx, req, *route, matchesSlice)
 				return
+			}
+
+			// Fallback to regex for complex cases or backward compatibility
+			if matchesSlice == nil || len(matchesSlice) == 0 {
+				matches := route.Regex.FindStringSubmatch(path)
+				if len(matches) > 0 {
+					// We found a match, handle it
+					r.handleMatchedRoute(ctx, req, *route, matches)
+					return
+				}
 			}
 		}
 	}
@@ -1865,6 +1962,9 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 
 	// If we didn't find method not allowed using radix trees, fall back to regex
 	if !methodNotAllowed {
+		// Create a reusable matches slice to avoid allocations
+		matchesSlice := make([]string, 0, 8)
+
 		// Use a more efficient approach to find allowed methods
 		// Pre-allocate a map to track methods we've already seen
 		methodSeen := make(map[string]bool, 8)
@@ -1882,12 +1982,21 @@ func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 				continue
 			}
 
-			matches := route.Regex.FindStringSubmatch(path)
-			if len(matches) > 0 {
+			// Try byte scanning first for better performance
+			if matchRouteByteScanning(route, path, &matchesSlice) {
 				// Path matches but method doesn't match
 				methodNotAllowed = true
 				methodSeen[route.Method] = true
 				allowedMethods = append(allowedMethods, route.Method)
+			} else {
+				// Fallback to regex for complex cases or backward compatibility
+				matches := route.Regex.FindStringSubmatch(path)
+				if len(matches) > 0 {
+					// Path matches but method doesn't match
+					methodNotAllowed = true
+					methodSeen[route.Method] = true
+					allowedMethods = append(allowedMethods, route.Method)
+				}
 			}
 		}
 	}
