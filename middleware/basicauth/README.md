@@ -80,6 +80,8 @@ func main() {
 ```
 ### Default config credential
 ```json
-Username: "example"
-Password: "example"
+{
+  "username": "example",
+  "password": "example"
+}
 ```
