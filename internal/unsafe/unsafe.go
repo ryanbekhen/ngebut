@@ -2,7 +2,6 @@ package unsafe
 
 import (
 	"bytes"
-	"reflect"
 	"unsafe"
 )
 
@@ -17,13 +16,7 @@ func B2S(b []byte) string {
 // Note: The returned byte slice must not be modified, as it points to the same
 // memory as the string.
 func S2B(s string) []byte {
-	sh := (*reflect.StringHeader)(unsafe.Pointer(&s))
-	bh := reflect.SliceHeader{
-		Data: sh.Data,
-		Len:  sh.Len,
-		Cap:  sh.Len,
-	}
-	return *(*[]byte)(unsafe.Pointer(&bh))
+	return unsafe.Slice((*byte)(unsafe.StringData(s)), len(s))
 }
 
 // EqualBytes compares a byte slice with a string without memory allocation.
