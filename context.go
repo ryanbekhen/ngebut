@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/goccy/go-json"
+	"github.com/ryanbekhen/ngebut/internal/unsafe"
 	"net"
 	"net/http"
 	"strconv"
@@ -1002,7 +1003,8 @@ func (c *Ctx) String(format string, values ...interface{}) {
 
 			// For very small strings, write directly without buffer
 			if len(format) < 64 {
-				_, _ = c.Writer.Write([]byte(format))
+				// Use zero-allocation string to bytes conversion
+				_, _ = c.Writer.Write(unsafe.S2B(format))
 				return
 			}
 
@@ -1016,6 +1018,7 @@ func (c *Ctx) String(format string, values ...interface{}) {
 			}
 
 			buf.WriteString(format)
+			// Use zero-allocation bytes access
 			_, _ = c.Writer.Write(buf.Bytes())
 			bufferPool.Put(buf)
 			return
@@ -1043,6 +1046,7 @@ func (c *Ctx) String(format string, values ...interface{}) {
 		// Use Fprintf for formatted strings
 		fmt.Fprintf(buf, format, values...)
 
+		// Use zero-allocation bytes access
 		_, _ = c.Writer.Write(buf.Bytes())
 		bufferPool.Put(buf)
 	}
@@ -1092,14 +1096,33 @@ func (c *Ctx) JSON(obj interface{}) {
 	// Fast path for simple types that can be marshaled efficiently
 	switch v := obj.(type) {
 	case string:
-		// For strings, use a buffer from the pool to avoid []byte conversion
+		// For strings, write directly to the response writer with quotes
+		// Pre-allocate a buffer with exact size to avoid reallocations
+		strLen := len(v)
+		bufSize := strLen + 2 // +2 for quotes
+
+		// Use a static buffer for small strings to avoid allocation
+		if bufSize <= 256 {
+			var staticBuf [256]byte
+			staticBuf[0] = '"'
+			copy(staticBuf[1:], unsafe.S2B(v))
+			staticBuf[bufSize-1] = '"'
+			_, _ = c.Writer.Write(staticBuf[:bufSize])
+			return
+		}
+
+		// For larger strings, use a buffer from the pool
 		buf := jsonBufferPool.Get().(*bytes.Buffer)
 		buf.Reset()
 
-		// Write the string with quotes directly to the buffer
-		buf.Write(jsonQuote)
-		buf.WriteString(v) // Avoid []byte conversion
-		buf.Write(jsonQuote)
+		// Ensure the buffer has enough capacity
+		if buf.Cap() < bufSize {
+			buf.Grow(bufSize - buf.Cap())
+		}
+
+		buf.WriteByte('"')
+		buf.WriteString(v)
+		buf.WriteByte('"')
 
 		// Write the buffer to the response writer
 		_, _ = c.Writer.Write(buf.Bytes())
@@ -1219,7 +1242,8 @@ func (c *Ctx) HTML(html string) {
 
 	// Fast path for small HTML strings (avoid buffer allocation)
 	if len(html) < 512 {
-		_, _ = c.Writer.Write([]byte(html))
+		// Use zero-allocation string to bytes conversion
+		_, _ = c.Writer.Write(unsafe.S2B(html))
 		return
 	}
 
@@ -1236,7 +1260,7 @@ func (c *Ctx) HTML(html string) {
 	// Write the HTML string to the buffer
 	buf.WriteString(html)
 
-	// Write directly from the buffer
+	// Write directly from the buffer using zero-allocation bytes access
 	_, _ = c.Writer.Write(buf.Bytes())
 
 	// Return buffer to pool

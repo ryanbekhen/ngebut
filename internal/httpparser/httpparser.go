@@ -240,27 +240,65 @@ func (hc *Codec) Parse(data []byte) (int, []byte, error) {
 	}
 
 	// Transfer-Encoding: chunked (less common case)
-	if idx := bytes.Index(data[bodyOffset:], lastChunk); idx != -1 {
-		bodyEnd := bodyOffset + idx + 5
-		if len(data) < bodyEnd {
-			return 0, nil, ErrIncompleteBody
-		}
+	// Use a more efficient approach to find the last chunk marker
+	dataLen := len(data)
+	bodyData := data[bodyOffset:]
+	bodyLen := len(bodyData)
 
-		// Try the optimized chunked body parser first
-		chunkedBody, err := parseChunkedBody(data[bodyOffset : bodyEnd-5])
-		if err == nil {
-			return bodyEnd, chunkedBody, nil
-		}
+	// Fast path for small bodies - direct search for "0\r\n\r\n"
+	if bodyLen < 256 {
+		for i := 0; i <= bodyLen-5; i++ {
+			if bodyData[i] == '0' &&
+				bodyData[i+1] == '\r' &&
+				bodyData[i+2] == '\n' &&
+				bodyData[i+3] == '\r' &&
+				bodyData[i+4] == '\n' {
+				bodyEnd := bodyOffset + i + 5
+				// Try the optimized chunked body parser first
+				chunkedBody, err := parseChunkedBody(data[bodyOffset : bodyEnd-5])
+				if err == nil {
+					return bodyEnd, chunkedBody, nil
+				}
 
-		// Fallback to standard library for complex cases
-		body, err := parseChunkedBodyFallback(data[:bodyEnd])
-		return bodyEnd, body, err
+				// Fallback to standard library for complex cases
+				body, err := parseChunkedBodyFallback(data[:bodyEnd])
+				return bodyEnd, body, err
+			}
+		}
+	} else {
+		// For larger bodies, use bytes.Index which is optimized for larger searches
+		if idx := bytes.Index(bodyData, lastChunk); idx != -1 {
+			bodyEnd := bodyOffset + idx + 5
+			if dataLen < bodyEnd {
+				return 0, nil, ErrIncompleteBody
+			}
+
+			// Try the optimized chunked body parser first
+			chunkedBody, err := parseChunkedBody(data[bodyOffset : bodyEnd-5])
+			if err == nil {
+				return bodyEnd, chunkedBody, nil
+			}
+
+			// Fallback to standard library for complex cases
+			body, err := parseChunkedBodyFallback(data[:bodyEnd])
+			return bodyEnd, body, err
+		}
 	}
 
-	// Fallback check for requests without a body using bytes.Index
-	// This is slower but more thorough
-	if idx := bytes.Index(data, crlf); idx != -1 {
-		return idx + 4, nil, nil
+	// Fallback check for requests without a body
+	// First try a direct search for double CRLF which is faster for small data
+	if dataLen < 256 {
+		for i := 0; i <= dataLen-4; i++ {
+			if data[i] == '\r' && data[i+1] == '\n' &&
+				data[i+2] == '\r' && data[i+3] == '\n' {
+				return i + 4, nil, nil
+			}
+		}
+	} else {
+		// For larger data, use bytes.Index
+		if idx := bytes.Index(data, doubleCrlfBytes); idx != -1 {
+			return idx + 4, nil, nil
+		}
 	}
 
 	return 0, nil, errors.New("invalid http request")
@@ -300,18 +338,18 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 		}
 	}
 
-	// Estimate the result size to avoid reallocations
-	// Most chunked bodies are smaller than the original data
-	resultCap := len(data) / 2
-	if resultCap < 1024 {
-		resultCap = 1024 // Minimum capacity of 1KB
-	}
-	result := make([]byte, 0, resultCap)
+	// First pass: calculate total size of all chunks to avoid reallocations
+	totalSize := 0
+	var chunkSizes []int   // Store chunk sizes to avoid recalculating
+	var chunkOffsets []int // Store chunk offsets to avoid recalculating
+
+	// Pre-allocate for common case (usually less than 8 chunks)
+	chunkSizes = make([]int, 0, 8)
+	chunkOffsets = make([]int, 0, 8)
 
 	var i int
 	for i < len(data) {
 		// Fast path for common chunk sizes (0-9) with direct character checks
-		// This avoids the expensive bytes.IndexByte call for simple cases
 		if i+2 < len(data) && data[i] >= '0' && data[i] <= '9' &&
 			data[i+1] == '\r' && data[i+2] == '\n' {
 			size := int(data[i] - '0')
@@ -327,8 +365,10 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 				return nil, ErrInvalidChunk
 			}
 
-			// Append the chunk data to the result
-			result = append(result, data[i:i+size]...)
+			// Store chunk info
+			chunkSizes = append(chunkSizes, size)
+			chunkOffsets = append(chunkOffsets, i)
+			totalSize += size
 
 			// Move past the chunk data and the trailing CRLF
 			i += size
@@ -352,8 +392,10 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 				return nil, ErrInvalidChunk
 			}
 
-			// Append the chunk data to the result
-			result = append(result, data[i:i+size]...)
+			// Store chunk info
+			chunkSizes = append(chunkSizes, size)
+			chunkOffsets = append(chunkOffsets, i)
+			totalSize += size
 
 			// Move past the chunk data and the trailing CRLF
 			i += size
@@ -404,14 +446,10 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 			return nil, ErrInvalidChunk
 		}
 
-		// Append the chunk data to the result
-		// Pre-grow the result slice if needed to avoid multiple small allocations
-		if cap(result)-len(result) < int(size) {
-			newResult := make([]byte, len(result), len(result)+int(size)+1024)
-			copy(newResult, result)
-			result = newResult
-		}
-		result = append(result, data[i:i+int(size)]...)
+		// Store chunk info
+		chunkSizes = append(chunkSizes, int(size))
+		chunkOffsets = append(chunkOffsets, i)
+		totalSize += int(size)
 
 		// Move past the chunk data and the trailing CRLF
 		i += int(size)
@@ -420,6 +458,23 @@ func parseChunkedBody(data []byte) ([]byte, error) {
 		} else {
 			return nil, ErrInvalidChunk
 		}
+	}
+
+	// If we have only one chunk, return a slice of the original data to avoid allocation
+	if len(chunkSizes) == 1 {
+		offset := chunkOffsets[0]
+		size := chunkSizes[0]
+		return data[offset : offset+size], nil
+	}
+
+	// Allocate result buffer with exact size needed
+	result := make([]byte, 0, totalSize)
+
+	// Second pass: copy chunks to result buffer
+	for i := 0; i < len(chunkSizes); i++ {
+		offset := chunkOffsets[i]
+		size := chunkSizes[i]
+		result = append(result, data[offset:offset+size]...)
 	}
 
 	return result, nil
@@ -644,6 +699,17 @@ func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
 		buf = hc.Buf[:0]
 	}
 
+	// Pre-calculate the total size needed for the initial part of the response
+	initialSize := len(httpVersion) + 4 + len(StatusText(statusCode)) + len(crlfBytes) + len(getDateHeader())
+
+	// Ensure we have enough capacity for the initial part
+	if cap(buf)-len(buf) < initialSize {
+		newCap := initialSize + estimatedSize
+		newBuf := make([]byte, len(buf), newCap)
+		copy(newBuf, buf)
+		buf = newBuf
+	}
+
 	// Write HTTP response - use pre-computed byte slices for common parts
 	buf = append(buf, httpVersion...)
 
@@ -663,13 +729,25 @@ func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
 
 	// Fast path for empty headers (common case)
 	if len(header) == 0 {
+		// Calculate size needed for Content-Length header and body
+		clSize := len(contentLengthPrefix) + 10 + len(doubleCrlfBytes) // 10 is max digits for content length
+		bodySize := len(body)
+
+		// Ensure we have enough capacity
+		if cap(buf)-len(buf) < clSize+bodySize {
+			newCap := len(buf) + clSize + bodySize + 256
+			newBuf := make([]byte, len(buf), newCap)
+			copy(newBuf, buf)
+			buf = newBuf
+		}
+
 		// Add Content-Length header
 		buf = append(buf, contentLengthPrefix...)
 		buf = strconv.AppendInt(buf, int64(len(body)), 10)
 		buf = append(buf, doubleCrlfBytes...)
 
 		// Add body
-		if len(body) > 0 {
+		if bodySize > 0 {
 			buf = append(buf, body...)
 		}
 
@@ -678,69 +756,39 @@ func (hc *Codec) WriteResponse(statusCode int, header Header, body []byte) {
 		return
 	}
 
-	// Add custom headers - optimize for common cases
-	if len(header) <= 8 { // Increased threshold for small maps
-		// Direct iteration for small maps is faster than range
-		for k, values := range header {
-			if len(values) == 1 { // Most common case: single value per header
-				// Pre-calculate the total size needed for this header
-				headerSize := len(k) + len(colonSpace) + len(values[0]) + len(crlfBytes)
-
-				// Ensure we have enough capacity to avoid reallocation
-				if cap(buf)-len(buf) < headerSize {
-					// Grow the buffer with extra capacity
-					newCap := cap(buf) * 2
-					if newCap < len(buf)+headerSize {
-						newCap = len(buf) + headerSize + 256 // Add extra space
-					}
-					newBuf := make([]byte, len(buf), newCap)
-					copy(newBuf, buf)
-					buf = newBuf
-				}
-
-				// Append all at once
-				buf = append(buf, k...)
-				buf = append(buf, colonSpace...)
-				buf = append(buf, values[0]...)
-				buf = append(buf, crlfBytes...)
-			} else {
-				for _, v := range values {
-					// Pre-calculate the total size needed for this header
-					headerSize := len(k) + len(colonSpace) + len(v) + len(crlfBytes)
-
-					// Ensure we have enough capacity to avoid reallocation
-					if cap(buf)-len(buf) < headerSize {
-						// Grow the buffer with extra capacity
-						newCap := cap(buf) * 2
-						if newCap < len(buf)+headerSize {
-							newCap = len(buf) + headerSize + 256 // Add extra space
-						}
-						newBuf := make([]byte, len(buf), newCap)
-						copy(newBuf, buf)
-						buf = newBuf
-					}
-
-					// Append all at once
-					buf = append(buf, k...)
-					buf = append(buf, colonSpace...)
-					buf = append(buf, v...)
-					buf = append(buf, crlfBytes...)
-				}
+	// Calculate total size needed for all headers
+	totalHeaderSize := 0
+	for k, values := range header {
+		headerKeySize := len(k) + len(colonSpace)
+		if len(values) == 1 {
+			totalHeaderSize += headerKeySize + len(values[0]) + len(crlfBytes)
+		} else {
+			for _, v := range values {
+				totalHeaderSize += headerKeySize + len(v) + len(crlfBytes)
 			}
 		}
-	} else {
-		// Standard path for many headers
-		// Pre-allocate space for headers to avoid reallocations
-		headerSpace := len(header) * 64 // Estimate 64 bytes per header on average
-		if cap(buf)-len(buf) < headerSpace {
-			// Grow the buffer with extra capacity
-			newCap := len(buf) + headerSpace + 256 // Add extra space
-			newBuf := make([]byte, len(buf), newCap)
-			copy(newBuf, buf)
-			buf = newBuf
-		}
+	}
 
-		for k, values := range header {
+	// Add size for Content-Length header and body
+	totalHeaderSize += len(contentLengthPrefix) + 10 + len(doubleCrlfBytes) // 10 is max digits for content length
+	totalSize := totalHeaderSize + len(body)
+
+	// Ensure we have enough capacity for all headers and body
+	if cap(buf)-len(buf) < totalSize {
+		newCap := len(buf) + totalSize + 256
+		newBuf := make([]byte, len(buf), newCap)
+		copy(newBuf, buf)
+		buf = newBuf
+	}
+
+	// Add custom headers - no need to check capacity anymore
+	for k, values := range header {
+		if len(values) == 1 { // Most common case: single value per header
+			buf = append(buf, k...)
+			buf = append(buf, colonSpace...)
+			buf = append(buf, values[0]...)
+			buf = append(buf, crlfBytes...)
+		} else {
 			for _, v := range values {
 				buf = append(buf, k...)
 				buf = append(buf, colonSpace...)

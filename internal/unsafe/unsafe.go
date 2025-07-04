@@ -1,7 +1,6 @@
 package unsafe
 
 import (
-	"bytes"
 	"unsafe"
 )
 
@@ -17,34 +16,4 @@ func B2S(b []byte) string {
 // memory as the string.
 func S2B(s string) []byte {
 	return unsafe.Slice((*byte)(unsafe.StringData(s)), len(s))
-}
-
-// EqualBytes compares a byte slice with a string without memory allocation.
-// This is more efficient than bytes.Equal(a, []byte(b)) as it avoids the allocation
-// of a new byte slice.
-func EqualBytes(a []byte, b string) bool {
-	bBytes := S2B(b)
-	if len(a) != len(bBytes) {
-		return false
-	}
-
-	// Fast path for empty strings
-	if len(a) == 0 {
-		return true
-	}
-
-	// Fast path for single character comparison
-	if len(a) == 1 {
-		return a[0] == bBytes[0]
-	}
-
-	// Use bytes.Equal for the comparison
-	return bytes.Equal(a, bBytes)
-}
-
-// AsInternal is a generic function to cast a struct pointer to another type
-// with the same memory layout.
-// Note: Use with extreme caution, as it bypasses Go's type system.
-func AsInternal[T any, U any](ptr *T) *U {
-	return (*U)(unsafe.Pointer(ptr))
 }
