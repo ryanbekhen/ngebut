@@ -68,6 +68,28 @@ var fastjsonParserPool = pool.New(func() *fastjson.Parser {
 	return &fastjson.Parser{}
 })
 
+// jsonEncoder is a wrapper around json.Encoder that can be reused with different writers
+type jsonEncoder struct {
+	encoder *json.Encoder
+	writer  *bytebufferpool.ByteBuffer
+}
+
+// Encode encodes the value to the writer
+func (e *jsonEncoder) Encode(v interface{}) error {
+	return e.encoder.Encode(v)
+}
+
+// SetWriter sets a new writer for the encoder
+func (e *jsonEncoder) SetWriter(w *bytebufferpool.ByteBuffer) {
+	e.writer = w
+	e.encoder = json.NewEncoder(w)
+}
+
+// jsonEncoderPool is a pool of JSON encoders for reuse
+var jsonEncoderPool = pool.New(func() *jsonEncoder {
+	return &jsonEncoder{}
+})
+
 // Pre-allocated error message for JSON encoding errors
 var jsonEncodingErr = errors.New("JSON encoding error")
 
@@ -1247,12 +1269,19 @@ func (c *Ctx) JSON(obj interface{}) {
 	buf := jsonBufferPool.Get()
 	buf.Reset()
 
-	// Use json.Encoder to write directly to the buffer
-	// This avoids the allocation from json.Marshal
-	if err := json.NewEncoder(buf).Encode(obj); err != nil {
+	// Use a pooled encoder to write directly to the buffer
+	// This avoids the allocation from both json.Marshal and creating a new encoder
+	encoder := jsonEncoderPool.Get()
+	encoder.SetWriter(buf)
+
+	if err := encoder.Encode(obj); err != nil {
 		// Use pre-allocated error message to avoid allocation
 		c.Error(jsonEncodingErr)
+		// Return the encoder to the pool even on error
+		jsonEncoderPool.Put(encoder)
 	} else {
+		// Return the encoder to the pool
+		jsonEncoderPool.Put(encoder)
 		// Get the buffer bytes
 		data := buf.Bytes()
 
