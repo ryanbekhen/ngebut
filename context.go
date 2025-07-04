@@ -834,101 +834,79 @@ func (c *Ctx) ensureQueryCache() map[string][]string {
 }
 
 // parseQueryString parses a query string into a map without allocating a new map
-// This is a more efficient version of url.ParseQuery that reuses an existing map
+// This is a zero-allocation implementation that uses manual byte scanning
 func parseQueryString(query string, values map[string][]string) {
 	// Fast path for empty query
 	if query == "" {
 		return
 	}
 
-	// Fast path for simple queries (most common case)
-	// If the query is simple (no special characters except & and =), we can use a faster approach
-	hasSpecialChars := false
-	for i := 0; i < len(query); i++ {
-		c := query[i]
-		if c == '+' || c == '%' {
-			hasSpecialChars = true
-			break
-		}
-	}
+	// Convert string to byte slice without allocation
+	queryBytes := unsafe.S2B(query)
 
-	// For simple queries, use a more optimized parsing approach
-	if !hasSpecialChars {
-		// Process the query string segment by segment
-		// This avoids unnecessary string slicing and function calls
-		start := 0
-		for i := 0; i <= len(query); i++ {
-			// Process at delimiter or end of string
-			if i == len(query) || query[i] == '&' {
-				if i > start {
-					segment := query[start:i]
-					// Find the equals sign
-					equalsPos := -1
-					for j := 0; j < len(segment); j++ {
-						if segment[j] == '=' {
-							equalsPos = j
-							break
-						}
-					}
-
-					// Handle key=value or just key
-					if equalsPos >= 0 {
-						key := segment[:equalsPos]
-						value := segment[equalsPos+1:]
-						// Direct map access is faster than function call
-						values[key] = append(values[key], value)
-					} else {
-						// Key with empty value
-						values[segment] = append(values[segment], "")
-					}
-				}
-				start = i + 1
-			}
-		}
-		return
-	}
-
-	// Fallback to the original implementation for complex queries with special characters
-	// Process the query string character by character
-	key := ""
-	value := ""
+	// Process the query string byte by byte
+	var keyStart, keyEnd, valueStart, valueEnd int
 	inKey := true
-	start := 0
 
-	for i := 0; i < len(query); i++ {
-		switch query[i] {
-		case '=':
+	// Inline early exit conditions for faster parsing
+	for i := 0; i <= len(queryBytes); i++ {
+		// Process at delimiter or end of string
+		if i == len(queryBytes) || queryBytes[i] == '&' {
 			if inKey {
-				key = query[start:i]
-				start = i + 1
-				inKey = false
-			}
-		case '&':
-			if !inKey {
-				value = query[start:i]
-				addQueryParam(values, key, value)
-			} else {
-				// Handle empty values like "key1&key2=val2"
-				key = query[start:i]
-				addQueryParam(values, key, "")
-			}
-			start = i + 1
-			inKey = true
-		}
-	}
+				// Key with no value
+				if i > keyStart {
+					// Extract key without allocation
+					key := unsafe.B2S(queryBytes[keyStart:i])
 
-	// Handle the last key-value pair
-	if start < len(query) {
-		if inKey {
-			// Last parameter has no value
-			key = query[start:]
-			addQueryParam(values, key, "")
-		} else {
-			// Last parameter has a value
-			value = query[start:]
-			addQueryParam(values, key, value)
+					// Handle URL encoding if needed
+					if containsSpecialChar(key) {
+						key = urlDecode(key)
+					}
+
+					// Add empty value
+					values[key] = append(values[key], "")
+				}
+			} else {
+				// Key with value
+				valueEnd = i
+
+				// Extract key and value without allocation
+				key := unsafe.B2S(queryBytes[keyStart:keyEnd])
+				value := unsafe.B2S(queryBytes[valueStart:valueEnd])
+
+				// Handle URL encoding if needed
+				if containsSpecialChar(key) {
+					key = urlDecode(key)
+				}
+				if containsSpecialChar(value) {
+					value = urlDecode(value)
+				}
+
+				// Add to map
+				values[key] = append(values[key], value)
+			}
+
+			// Reset for next pair
+			keyStart = i + 1
+			inKey = true
+		} else if queryBytes[i] == '=' && inKey {
+			// Transition from key to value
+			keyEnd = i
+			valueStart = i + 1
+			inKey = false
 		}
 	}
+}
+
+// containsSpecialChar checks if a string contains URL-encoded characters
+// This is an inline function to avoid function call overhead
+func containsSpecialChar(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '+' || s[i] == '%' {
+			return true
+		}
+	}
+	return false
 }
 
 // addQueryParam adds a query parameter to the values map

@@ -61,8 +61,9 @@ var allowedMethodsPool = pool.New(func() []string {
 // Router is an HTTP request router.
 type Router struct {
 	Routes          []route
-	routesByMethod  map[string][]route     // Routes indexed by method for faster lookup
-	routeTrees      map[string]*radix.Tree // Radix trees indexed by method for faster lookup
+	routesByMethod  map[string][]route              // Routes indexed by method for faster lookup
+	routeTrees      map[string]*radix.Tree          // Radix trees indexed by method for faster lookup
+	staticRoutes    map[string]map[string][]Handler // Static routes indexed by method and path for O(1) lookup
 	middlewareFuncs []MiddlewareFunc
 	NotFound        Handler
 
@@ -77,6 +78,7 @@ func NewRouter() *Router {
 		Routes:          []route{},
 		routesByMethod:  make(map[string][]route),
 		routeTrees:      make(map[string]*radix.Tree),
+		staticRoutes:    make(map[string]map[string][]Handler),
 		middlewareFuncs: []MiddlewareFunc{},
 		NotFound: func(c *Ctx) {
 			c.Status(StatusNotFound)
@@ -269,6 +271,25 @@ func (r *Router) Handle(pattern, method string, handlers ...Handler) *Router {
 			r.routeTrees[MethodHead] = headTree
 		}
 		headTree.Insert(pattern, MethodHead, handlers)
+	}
+
+	// Add static routes to the staticRoutes map for O(1) lookup
+	if !hasParams && !strings.Contains(pattern, "*") {
+		// Initialize the method map if it doesn't exist
+		if _, exists := r.staticRoutes[method]; !exists {
+			r.staticRoutes[method] = make(map[string][]Handler)
+		}
+
+		// Add the route to the staticRoutes map
+		r.staticRoutes[method][pattern] = handlers
+
+		// For HEAD requests, we can also use GET handlers (HTTP spec)
+		if method == MethodGet {
+			if _, exists := r.staticRoutes[MethodHead]; !exists {
+				r.staticRoutes[MethodHead] = make(map[string][]Handler)
+			}
+			r.staticRoutes[MethodHead][pattern] = handlers
+		}
 	}
 
 	return r
@@ -1865,6 +1886,16 @@ func releasePathMatchContext(ctx *pathMatchContext) {
 func (r *Router) ServeHTTP(ctx *Ctx, req *Request) {
 	path := req.URL.Path
 	method := req.Method
+
+	// O(1) lookup for static routes using hash map
+	if methodRoutes, exists := r.staticRoutes[method]; exists {
+		if handlers, found := methodRoutes[path]; found {
+			// We found a static match in the hash map, handle it without parameter processing
+			// Set up middleware and call the handler
+			r.setupMiddleware(ctx, handlers)
+			return
+		}
+	}
 
 	// Convert path to byte slice without allocation using unsafe
 	pathBytes := unsafe.S2B(path)
