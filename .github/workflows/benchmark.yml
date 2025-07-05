@@ -4,6 +4,9 @@ name: Benchmark
 # and fails if any benchmark is more than 5% slower than the base branch.
 # It compares the ns/op (nanoseconds per operation) metric.
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches:
