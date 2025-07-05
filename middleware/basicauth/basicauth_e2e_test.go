@@ -118,8 +118,13 @@ func TestBasicAuthMiddlewareE2E(t *testing.T) {
 				defer ngebut.ReleaseContext(ctx)
 
 				// Apply the middleware
-				middleware := New(tc.config).(func(*ngebut.Ctx))
-				middleware(ctx)
+				middleware := New(tc.config)
+				if err := middleware(ctx); err != nil {
+					unauthorizedFunc(ctx)
+					return
+				}
+				// If no error, call the handler
+				handlerFunc(ctx)
 
 				// Check if the response has been written
 				if w.Header().Get("Content-Type") != "" {
