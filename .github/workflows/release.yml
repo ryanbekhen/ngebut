@@ -128,7 +128,7 @@ jobs:
             fi
 
             echo -e "\n## 👥 Contributors" >> $GITHUB_ENV
-            git log --pretty=format:"* %aN" | sort | uniq >> $GITHUB_ENV
+            git log --pretty=format:"%aN" | sort | uniq | paste -sd "," - >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
           else
             echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
@@ -217,7 +217,7 @@ jobs:
             fi
 
             echo -e "\n## 👥 Contributors" >> $GITHUB_ENV
-            git log --pretty=format:"* %aN" $PREVIOUS_TAG..HEAD | sort | uniq >> $GITHUB_ENV
+            git log --pretty=format:"%aN" $PREVIOUS_TAG..HEAD | sort | uniq | paste -sd "," - >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
           fi
 
@@ -235,12 +235,6 @@ jobs:
             ```bash
             go get github.com/ryanbekhen/ngebut@${{ env.VERSION }}
             ```
-
-            ## Documentation
-            For full documentation, visit the [GitHub repository](https://github.com/ryanbekhen/ngebut).
-
-            ## License
-            This project is licensed under the MIT License - see the LICENSE file for details.
           draft: false
           prerelease: false
         env:
