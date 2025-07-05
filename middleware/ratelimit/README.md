@@ -42,11 +42,11 @@ func main() {
 	// Apply RateLimit middleware with default configuration
 	app.Use(ratelimit.New())
 
-	app.GET("/hello", func(c *ngebut.Ctx) error {
-		return c.String("Hello, World!")
+	app.GET("/hello", func(c *ngebut.Ctx) {
+		c.String("Hello, World!")
 	})
 
-	app.Listen(":3000")
+	app.Listen(":8080")
 }
 ```
 
@@ -72,11 +72,11 @@ func main() {
 		ExpiresIn: time.Hour * 24, // Keep visitor records for 24 hours
 	}))
 
-	app.GET("/hello", func(c *ngebut.Ctx) error {
-		return c.String("Hello, World!")
+	app.GET("/hello", func(c *ngebut.Ctx) {
+		c.String("Hello, World!")
 	})
 
-	app.Listen(":3000")
+	app.Listen(":8080")
 }
 ```
 
