@@ -167,28 +167,13 @@ func TestSessionExpireE2E(t *testing.T) {
 
 	// If no session_id cookie was found, try to parse it from the Set-Cookie header
 	if sessionCookie == nil && setCookieHeader != "" {
-		// Parse the Set-Cookie header manually
-		parts := strings.Split(setCookieHeader, ";")
-		if len(parts) > 0 {
-			nameValue := strings.Split(parts[0], "=")
-			// Handle the case where the cookie name is missing (starts with =)
-			if len(nameValue) >= 2 {
-				var name, value string
-				if nameValue[0] == "" && len(nameValue) > 2 {
-					// Cookie starts with =, so name is empty and value is the second part
-					name = "session_id" // Assume this is the session cookie
-					value = nameValue[1]
-				} else {
-					name = nameValue[0]
-					value = nameValue[1]
-				}
-
-				sessionCookie = &http.Cookie{
-					Name:  name,
-					Value: value,
-				}
-
-				t.Logf("Parsed cookie from header: Name=%s, Value=%s", name, value)
+		// Use http.ReadSetCookies to parse the Set-Cookie header
+		parsedCookies := http.ReadSetCookies(respSet.Header)
+		for _, cookie := range parsedCookies {
+			if cookie.Name == "session_id" {
+				sessionCookie = cookie
+				t.Logf("Parsed cookie from header: Name=%s, Value=%s", cookie.Name, cookie.Value)
+				break
 			}
 		}
 	}
