@@ -134,12 +134,15 @@ func TestCORSPreflightE2E(t *testing.T) {
 	resp := w.Result()
 	defer resp.Body.Close()
 
-	// Debug output
-	t.Logf("Response status code: %d", resp.StatusCode)
-	t.Logf("Response headers: %v", resp.Header)
+	// Verify the response status for preflight
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode, "Unexpected status code for preflight request")
 
-	// Check if the status code was set in the context
-	t.Logf("Context status code: %d", ctx.StatusCode())
+	// Verify CORS headers for preflight
+	assert.Equal(t, "http://example.com", resp.Header.Get("Access-Control-Allow-Origin"), "Unexpected Access-Control-Allow-Origin header")
+	assert.Equal(t, "GET,POST", resp.Header.Get("Access-Control-Allow-Methods"), "Unexpected Access-Control-Allow-Methods header")
+	assert.Equal(t, "Content-Type,Authorization", resp.Header.Get("Access-Control-Allow-Headers"), "Unexpected Access-Control-Allow-Headers header")
+	assert.Equal(t, "true", resp.Header.Get("Access-Control-Allow-Credentials"), "Unexpected Access-Control-Allow-Credentials header")
+	assert.Equal(t, "3600", resp.Header.Get("Access-Control-Max-Age"), "Unexpected Access-Control-Max-Age header")
 
 	// Verify the response status for preflight
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode, "Unexpected status code for preflight request")
