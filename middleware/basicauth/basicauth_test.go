@@ -7,11 +7,11 @@ import (
 
 func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
-	assert.Contains(t, "example", config.Username, "DefaultConfig() returned unexpected Username value")
-	assert.Contains(t, "example", config.Password, "DefaultConfig() returned unexpected Password value")
+	assert.Contains(t, config.Username, "example", "DefaultConfig() returned unexpected Username value")
+	assert.Contains(t, config.Password, "example", "DefaultConfig() returned unexpected Password value")
 }
 
-func TestCustomeConfig(t *testing.T) {
+func TestCustomConfig(t *testing.T) {
 	config := DefaultConfig()
 	config.Username = "admin"
 	config.Password = "password"
@@ -21,12 +21,11 @@ func TestCustomeConfig(t *testing.T) {
 }
 
 func TestNew(t *testing.T) {
-	middleware := New()
-	assert.NotNil(t, middleware, "New() returned nil")
-
 	customConfig := Config{
 		Username: "myuser",
 		Password: "mypassword",
 	}
+	middleware := New(customConfig)
+	assert.NotNil(t, middleware, "New() returned nil")
 	assert.Equal(t, "myuser", customConfig.Username, "New() returned unexpected Username value")
 }

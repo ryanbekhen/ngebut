@@ -24,7 +24,7 @@ A simple, secure, and reusable **Basic Authentication** middleware for the custo
 
 ## ⚙️ Configuration
 
-### ✅ Using Custome Config
+### ✅ Using Custom Config
 
 ```go
 package main

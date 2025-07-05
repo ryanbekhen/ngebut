@@ -37,7 +37,7 @@ func New(config ...Config) interface{} {
 		// Get Basic Authentication value
 		authHeader := c.Get(ngebut.HeaderAuthorization)
 
-		// Standart prefix of Basic Authentication
+		// Standard prefix of Basic Authentication
 		const prefix = "Basic "
 		if len(authHeader) <= len(prefix) || authHeader[:len(prefix)] != prefix {
 			return
@@ -68,7 +68,7 @@ func New(config ...Config) interface{} {
 			}
 		}
 
-		// If no colon ':' was found, the credentials format is invalid.
+		// If no colon ':' was found, the credential format is invalid.
 		// According to the Basic Auth standard, the credentials must be in the format "username:password".
 		// Returning early ensures unauthorized requests are rejected.
 		if sep == -1 {
