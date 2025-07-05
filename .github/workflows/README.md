@@ -31,3 +31,39 @@ The workflow uploads the following artifacts:
 #### Threshold
 
 The threshold for failing the workflow is a 5% increase in the ns/op (nanoseconds per operation) metric. This threshold can be adjusted in the Go script in the workflow file.
+
+### Release (`release.yml`)
+
+This workflow automatically creates a GitHub release when a new tag is pushed to the repository.
+
+#### How it works
+
+1. It triggers when a tag with the format `v*` (e.g., `v1.0.0`) is pushed
+2. It checks out the code with full history
+3. It sets up Go and downloads dependencies
+4. It runs tests to ensure the release is stable
+5. It extracts release notes from the git log (commits since the last tag)
+6. It creates a GitHub release with formatted release notes and other details
+
+#### Release Notes Format
+
+The release notes are automatically generated from the git commit history and categorized into sections:
+
+- **⚠️ Breaking Changes**: Changes that might break existing code (commits containing "breaking", "breaking change", etc.)
+- **✨ New Features**: New functionality added (commits containing "feat", "feature", "add", "new", etc.)
+- **🐛 Bug Fixes**: Issues that have been fixed (commits containing "fix", "bug", "issue", "resolve", etc.)
+- **🔄 Other Changes**: Any other changes that don't fit into the above categories
+- **👥 Contributors**: List of people who contributed to this release
+
+#### How to Use
+
+To create a new release:
+
+1. Make sure all your changes are committed and pushed to the repository
+2. Create a new tag with the format `v*` (e.g., `v1.0.0`)
+3. Push the tag to the repository:
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+4. The workflow will automatically create a GitHub release with the generated release notes

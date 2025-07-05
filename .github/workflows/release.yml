@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Extract release notes
+        id: extract_release_notes
+        run: |
+          # Extract version from tag
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+          # Extract release notes from git log
+          # This gets all commits since the last tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            # If there's no previous tag, get all commits
+            echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+
+            # Breaking Changes
+            BREAKING_CHANGES=$(git log --pretty=format:"* %s (%h)" | grep -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$BREAKING_CHANGES" ]; then
+              echo "## ⚠️ Breaking Changes" >> $GITHUB_ENV
+              echo "$BREAKING_CHANGES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # New Features
+            FEATURES=$(git log --pretty=format:"* %s (%h)" | grep -i "feat\|feature\|add\|new" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$FEATURES" ]; then
+              echo "## ✨ New Features" >> $GITHUB_ENV
+              echo "$FEATURES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Bug Fixes
+            FIXES=$(git log --pretty=format:"* %s (%h)" | grep -i "fix\|bug\|issue\|resolve" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$FIXES" ]; then
+              echo "## 🐛 Bug Fixes" >> $GITHUB_ENV
+              echo "$FIXES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Other Changes
+            OTHER=$(git log --pretty=format:"* %s (%h)" | grep -v -i "breaking\|breaking change\|breaking-change\|feat\|feature\|add\|new\|fix\|bug\|issue\|resolve" || echo "")
+            if [ ! -z "$OTHER" ]; then
+              echo "## 🔄 Other Changes" >> $GITHUB_ENV
+              echo "$OTHER" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            echo -e "\n## 👥 Contributors" >> $GITHUB_ENV
+            git log --pretty=format:"* %an" | sort | uniq >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          else
+            echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+
+            # Breaking Changes
+            BREAKING_CHANGES=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$BREAKING_CHANGES" ]; then
+              echo "## ⚠️ Breaking Changes" >> $GITHUB_ENV
+              echo "$BREAKING_CHANGES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # New Features
+            FEATURES=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "feat\|feature\|add\|new" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$FEATURES" ]; then
+              echo "## ✨ New Features" >> $GITHUB_ENV
+              echo "$FEATURES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Bug Fixes
+            FIXES=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "fix\|bug\|issue\|resolve" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$FIXES" ]; then
+              echo "## 🐛 Bug Fixes" >> $GITHUB_ENV
+              echo "$FIXES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Other Changes
+            OTHER=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -v -i "breaking\|breaking change\|breaking-change\|feat\|feature\|add\|new\|fix\|bug\|issue\|resolve" || echo "")
+            if [ ! -z "$OTHER" ]; then
+              echo "## 🔄 Other Changes" >> $GITHUB_ENV
+              echo "$OTHER" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            echo -e "\n## 👥 Contributors" >> $GITHUB_ENV
+            git log --pretty=format:"* %an" $PREVIOUS_TAG..HEAD | sort | uniq >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          fi
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ env.VERSION }}
+          body: |
+            # Ngebut ${{ env.VERSION }}
+
+            ${{ env.RELEASE_NOTES }}
+
+            ## Installation
+            ```bash
+            go get github.com/ryanbekhen/ngebut@${{ env.VERSION }}
+            ```
+
+            ## Documentation
+            For full documentation, visit the [GitHub repository](https://github.com/ryanbekhen/ngebut).
+
+            ## License
+            This project is licensed under the MIT License - see the LICENSE file for details.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
