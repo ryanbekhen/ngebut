@@ -143,16 +143,16 @@ func TestSessionExpireE2E(t *testing.T) {
 	// Try to get the session cookie from the response
 	cookies := respSet.Cookies()
 
-	// Debug output
-	t.Logf("Number of cookies: %d", len(cookies))
-	for i, cookie := range cookies {
-		t.Logf("Cookie %d: Name=%s, Value=%s", i, cookie.Name, cookie.Value)
-	}
+	// Validate cookies
+	assert.NotEmpty(t, cookies, "No cookies were set")
+	assert.Equal(t, 1, len(cookies), "Unexpected number of cookies")
+	sessionCookie := cookies[0]
+	assert.Equal(t, "session_id", sessionCookie.Name, "Unexpected cookie name")
+	assert.NotEmpty(t, sessionCookie.Value, "Cookie value should not be empty")
 
-	// Check response headers directly
-	t.Logf("Response headers: %v", respSet.Header)
+	// Validate response headers
 	setCookieHeader := respSet.Header.Get("Set-Cookie")
-	t.Logf("Set-Cookie header: %s", setCookieHeader)
+	assert.NotEmpty(t, setCookieHeader, "Set-Cookie header should not be empty")
 
 	// We'll skip this assertion since we're now getting the cookie from the Set-Cookie header
 	// assert.NotEmpty(t, cookies, "No cookies were set")
