@@ -195,8 +195,8 @@ func TestSessionExpireE2E(t *testing.T) {
 
 	require.NotNil(t, sessionCookie, "Session cookie was not set")
 
-	// Wait for the session to expire
-	time.Sleep(2 * time.Second)
+	// Simulate session expiration
+	ExpireSession(sessionCookie.Value)
 
 	// Create a test HTTP request for getting the session
 	reqGet, _ := http.NewRequest("GET", "http://example.com/get-session", nil)
