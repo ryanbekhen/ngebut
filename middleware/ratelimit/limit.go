@@ -17,26 +17,31 @@ type Config struct {
 
 // Visitor represents a client with a rate limiter and the last recorded activity time.
 type Visitor struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
+	limiter  *rate.Limiter // The rate limiter instance for the visitor
+	lastSeen time.Time     // The last time this visitor was seen
 }
 
+// ErrLimiter is the default HTTP error returned when a client exceeds the rate limit.
 var ErrLimiter = ngebut.NewHttpError(ngebut.StatusTooManyRequests, "limit reached")
 
 var (
+	// visitors stores the active visitors and their associated rate limiters.
 	visitors = make(map[string]*Visitor)
 
-	// mu is a Mutex used to synchronize access to the shared visitors map, ensuring thread-safe operations.
+	// mu is a Mutex used to synchronize access to the shared visitors map,
+	// ensuring thread-safe operations.
 	mu sync.Mutex
 )
 
-// NewVisitor creates a new limiter for a given config
+// NewVisitor creates and returns a new rate limiter instance
+// based on the provided configuration.
 func NewVisitor(cfg Config) *rate.Limiter {
 	rateLimit := rate.Every(cfg.Duration / time.Duration(cfg.Requests))
 	return rate.NewLimiter(rateLimit, cfg.Burst)
 }
 
-// CleanupVisitors removes stale visitors
+// CleanupVisitors periodically removes stale visitor entries
+// from the visitors map after they exceed the specified expiration duration.
 func CleanupVisitors(expiresIn time.Duration) {
 	for {
 		time.Sleep(time.Minute)
@@ -50,7 +55,8 @@ func CleanupVisitors(expiresIn time.Duration) {
 	}
 }
 
-// GetVisitor gets or creates a visitor limiter
+// GetVisitor retrieves the rate limiter for a given IP address.
+// If the visitor does not exist, a new one is created using the provided config.
 func GetVisitor(ip string, cfg Config) *rate.Limiter {
 	mu.Lock()
 	defer mu.Unlock()
@@ -66,6 +72,8 @@ func GetVisitor(ip string, cfg Config) *rate.Limiter {
 	return v.limiter
 }
 
+// DefaultConfig returns a Config object with default rate limiting settings:
+// 1 request, burst of 5, a 1-minute duration window, and a 1-hour expiration time.
 func DefaultConfig() Config {
 	return Config{
 		Requests:  1,
@@ -75,7 +83,8 @@ func DefaultConfig() Config {
 	}
 }
 
-// New with custom config
+// New creates and returns rate limiting middleware for the Ngebut framework.
+// It accepts an optional custom Config; if none is provided, DefaultConfig is used.
 func New(config ...Config) func(c *ngebut.Ctx) error {
 
 	cfg := DefaultConfig()
