@@ -128,7 +128,7 @@ jobs:
             fi
 
             echo -e "\n## 👥 Contributors" >> $GITHUB_ENV
-            git log --pretty=format:"* %an" | sort | uniq >> $GITHUB_ENV
+            git log --pretty=format:"* %aN" | sort | uniq >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
           else
             echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
@@ -217,7 +217,7 @@ jobs:
             fi
 
             echo -e "\n## 👥 Contributors" >> $GITHUB_ENV
-            git log --pretty=format:"* %an" $PREVIOUS_TAG..HEAD | sort | uniq >> $GITHUB_ENV
+            git log --pretty=format:"* %aN" $PREVIOUS_TAG..HEAD | sort | uniq >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
           fi
 
