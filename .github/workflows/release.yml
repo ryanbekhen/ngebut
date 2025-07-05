@@ -1,0 +1,247 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Extract release notes
+        id: extract_release_notes
+        run: |
+          # Extract version from tag
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+          # Extract release notes from git log
+          # This gets all commits since the last tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            # If there's no previous tag, get all commits
+            echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+
+            # Breaking Changes
+            BREAKING_CHANGES=$(git log --pretty=format:"* %s (%h)" | grep -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$BREAKING_CHANGES" ]; then
+              echo "## ⚠️ Breaking Changes" >> $GITHUB_ENV
+              echo "$BREAKING_CHANGES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Features
+            echo "## ✨ New Features" >> $GITHUB_ENV
+
+            # Feature implementations
+            FEAT_IMPL=$(git log --pretty=format:"* %s (%h)" | grep -i "^feat:" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$FEAT_IMPL" ]; then
+              echo "### 🚀 Feature Implementations" >> $GITHUB_ENV
+              echo "$FEAT_IMPL" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Test additions
+            TEST_ADDITIONS=$(git log --pretty=format:"* %s (%h)" | grep -i "^test:" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$TEST_ADDITIONS" ]; then
+              echo "### 🧪 Test Additions" >> $GITHUB_ENV
+              echo "$TEST_ADDITIONS" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Workflow and CI/CD improvements
+            WORKFLOW_IMPROVEMENTS=$(git log --pretty=format:"* %s (%h)" | grep -i "^chore:.*github actions\|github actions workflow\|workflow\|ci/cd\|ci cd" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$WORKFLOW_IMPROVEMENTS" ]; then
+              echo "### 🔧 Workflow & CI/CD" >> $GITHUB_ENV
+              echo "$WORKFLOW_IMPROVEMENTS" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Benchmark additions
+            BENCHMARK_ADDITIONS=$(git log --pretty=format:"* %s (%h)" | grep -i "benchmark\|performance test" | grep -v -i "^perf:\|breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$BENCHMARK_ADDITIONS" ]; then
+              echo "### 📊 Benchmarks" >> $GITHUB_ENV
+              echo "$BENCHMARK_ADDITIONS" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Other feature additions (for backward compatibility)
+            OTHER_FEATURES=$(git log --pretty=format:"* %s (%h)" | grep -i "add\|new\|implement" | grep -v -i "^feat:\|^test:\|^chore:\|benchmark\|performance test\|breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$OTHER_FEATURES" ]; then
+              echo "### 🌟 Other Additions" >> $GITHUB_ENV
+              echo "$OTHER_FEATURES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Bug Fixes
+            FIXES=$(git log --pretty=format:"* %s (%h)" | grep -i "fix\|bug\|issue\|resolve" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$FIXES" ]; then
+              echo "## 🐛 Bug Fixes" >> $GITHUB_ENV
+              echo "$FIXES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Performance Improvements
+            PERF_IMPROVEMENTS=$(git log --pretty=format:"* %s (%h)" | grep -i "^perf:" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$PERF_IMPROVEMENTS" ]; then
+              echo "## ⚡ Performance Improvements" >> $GITHUB_ENV
+              echo "$PERF_IMPROVEMENTS" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Dependency Updates
+            DEPENDENCY_UPDATES=$(git log --pretty=format:"* %s (%h)" | grep -i "^bump\|update.*dependenc\|dependabot\|go_modules\|go modules\|dependencies\|dependency" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$DEPENDENCY_UPDATES" ]; then
+              echo "## 📦 Dependency Updates" >> $GITHUB_ENV
+              echo "$DEPENDENCY_UPDATES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Other Changes
+            OTHER=$(git log --pretty=format:"* %s (%h)" | grep -v -i "breaking\|breaking change\|breaking-change\|^feat:\|^test:\|^chore:\|^perf:\|^bump\|fix\|bug\|issue\|resolve\|add\|new\|implement\|update.*dependenc\|dependabot\|go_modules\|go modules\|dependencies\|dependency\|benchmark\|performance test\|workflow\|ci/cd\|ci cd" || echo "")
+            if [ ! -z "$OTHER" ]; then
+              echo "## 🔄 Other Changes" >> $GITHUB_ENV
+              echo "$OTHER" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            echo -e "\n## 👥 Contributors" >> $GITHUB_ENV
+            git log --pretty=format:"* %aN" | sort | uniq >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          else
+            echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+
+            # Breaking Changes
+            BREAKING_CHANGES=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$BREAKING_CHANGES" ]; then
+              echo "## ⚠️ Breaking Changes" >> $GITHUB_ENV
+              echo "$BREAKING_CHANGES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Features
+            echo "## ✨ New Features" >> $GITHUB_ENV
+
+            # Feature implementations
+            FEAT_IMPL=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "^feat:" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$FEAT_IMPL" ]; then
+              echo "### 🚀 Feature Implementations" >> $GITHUB_ENV
+              echo "$FEAT_IMPL" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Test additions
+            TEST_ADDITIONS=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "^test:" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$TEST_ADDITIONS" ]; then
+              echo "### 🧪 Test Additions" >> $GITHUB_ENV
+              echo "$TEST_ADDITIONS" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Workflow and CI/CD improvements
+            WORKFLOW_IMPROVEMENTS=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "^chore:.*github actions\|github actions workflow\|workflow\|ci/cd\|ci cd" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$WORKFLOW_IMPROVEMENTS" ]; then
+              echo "### 🔧 Workflow & CI/CD" >> $GITHUB_ENV
+              echo "$WORKFLOW_IMPROVEMENTS" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Benchmark additions
+            BENCHMARK_ADDITIONS=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "benchmark\|performance test" | grep -v -i "^perf:\|breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$BENCHMARK_ADDITIONS" ]; then
+              echo "### 📊 Benchmarks" >> $GITHUB_ENV
+              echo "$BENCHMARK_ADDITIONS" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Other feature additions (for backward compatibility)
+            OTHER_FEATURES=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "add\|new\|implement" | grep -v -i "^feat:\|^test:\|^chore:\|benchmark\|performance test\|breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$OTHER_FEATURES" ]; then
+              echo "### 🌟 Other Additions" >> $GITHUB_ENV
+              echo "$OTHER_FEATURES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Bug Fixes
+            FIXES=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "fix\|bug\|issue\|resolve" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$FIXES" ]; then
+              echo "## 🐛 Bug Fixes" >> $GITHUB_ENV
+              echo "$FIXES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Performance Improvements
+            PERF_IMPROVEMENTS=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "^perf:" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$PERF_IMPROVEMENTS" ]; then
+              echo "## ⚡ Performance Improvements" >> $GITHUB_ENV
+              echo "$PERF_IMPROVEMENTS" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Dependency Updates
+            DEPENDENCY_UPDATES=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -i "^bump\|update.*dependenc\|dependabot\|go_modules\|go modules\|dependencies\|dependency" | grep -v -i "breaking\|breaking change\|breaking-change" || echo "")
+            if [ ! -z "$DEPENDENCY_UPDATES" ]; then
+              echo "## 📦 Dependency Updates" >> $GITHUB_ENV
+              echo "$DEPENDENCY_UPDATES" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            # Other Changes
+            OTHER=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD | grep -v -i "breaking\|breaking change\|breaking-change\|^feat:\|^test:\|^chore:\|^perf:\|^bump\|fix\|bug\|issue\|resolve\|add\|new\|implement\|update.*dependenc\|dependabot\|go_modules\|go modules\|dependencies\|dependency\|benchmark\|performance test\|workflow\|ci/cd\|ci cd" || echo "")
+            if [ ! -z "$OTHER" ]; then
+              echo "## 🔄 Other Changes" >> $GITHUB_ENV
+              echo "$OTHER" >> $GITHUB_ENV
+              echo "" >> $GITHUB_ENV
+            fi
+
+            echo -e "\n## 👥 Contributors" >> $GITHUB_ENV
+            git log --pretty=format:"* %aN" $PREVIOUS_TAG..HEAD | sort | uniq >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          fi
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ env.VERSION }}
+          body: |
+            # Ngebut ${{ env.VERSION }}
+
+            ${{ env.RELEASE_NOTES }}
+
+            ## Installation
+            ```bash
+            go get github.com/ryanbekhen/ngebut@${{ env.VERSION }}
+            ```
+
+            ## Documentation
+            For full documentation, visit the [GitHub repository](https://github.com/ryanbekhen/ngebut).
+
+            ## License
+            This project is licensed under the MIT License - see the LICENSE file for details.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
