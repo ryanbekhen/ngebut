@@ -8,7 +8,6 @@ import (
 
 // Config represents the configuration structure for username and password authentication.
 type Config struct {
-
 	// Username represents the username required for basic authentication in the configuration.
 	Username string
 
@@ -25,7 +24,8 @@ func DefaultConfig() Config {
 }
 
 // New creates and returns a middleware function for Basic Authentication using the provided configuration or defaults.
-func New(config ...Config) interface{} {
+// The returned middleware returns an error if authentication fails, or nil if successful.
+func New(config ...Config) func(c *ngebut.Ctx) error {
 	// Determine which config to use
 	cfg := DefaultConfig()
 	if len(config) > 0 {
@@ -33,14 +33,14 @@ func New(config ...Config) interface{} {
 	}
 
 	// Return the middleware function
-	return func(c *ngebut.Ctx) {
+	return func(c *ngebut.Ctx) error {
 		// Get Basic Authentication value
 		authHeader := c.Get(ngebut.HeaderAuthorization)
 
 		// Standard prefix of Basic Authentication
 		const prefix = "Basic "
 		if len(authHeader) <= len(prefix) || authHeader[:len(prefix)] != prefix {
-			return
+			return ErrUnauthorized
 		}
 
 		// Attempt to decode the Base64-encoded credentials from the Authorization header.
@@ -49,7 +49,7 @@ func New(config ...Config) interface{} {
 		// In that case, we stop processing and treat it as unauthorized.
 		decoded, err := base64.StdEncoding.DecodeString(authHeader[len(prefix):])
 		if err != nil {
-			return
+			return ErrUnauthorized
 		}
 
 		// Convert the decoded Base64 bytes into a string representation
@@ -72,7 +72,7 @@ func New(config ...Config) interface{} {
 		// According to the Basic Auth standard, the credentials must be in the format "username:password".
 		// Returning early ensures unauthorized requests are rejected.
 		if sep == -1 {
-			return
+			return ErrUnauthorized
 		}
 
 		// Extract the username and password from the credential string
@@ -89,6 +89,11 @@ func New(config ...Config) interface{} {
 			subtle.ConstantTimeCompare([]byte(password), []byte(cfg.Password)) == 1 {
 			// Credentials are valid; proceed to the next handler in the chain.
 			c.Next()
+			return nil
 		}
+		return ErrUnauthorized
 	}
 }
+
+// ErrUnauthorized is returned when basic authentication fails.
+var ErrUnauthorized = ngebut.NewHttpError(ngebut.StatusUnauthorized, "Unauthorized")
