@@ -153,8 +153,7 @@ func New(config ...Config) ngebut.Middleware {
 
 			// Respond with 204 No Content for preflight requests
 			c.Status(ngebut.StatusNoContent)
-			// Write an empty response to ensure the status code is written to the response
-			c.String("")
+			flushStatusCode(c)
 			return
 		}
 
