@@ -21,8 +21,8 @@ func newTestCtx(ip string) *ngebut.Ctx {
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	assert.Equal(t, 1, cfg.Requests)
-	assert.Equal(t, 5, cfg.Burst)
-	assert.Equal(t, time.Minute, cfg.Duration)
+	assert.Equal(t, 0, cfg.Burst)
+	assert.Equal(t, time.Second, cfg.Duration)
 	assert.Equal(t, time.Hour, cfg.ExpiresIn)
 }
 
@@ -45,13 +45,12 @@ func TestRateLimit(t *testing.T) {
 
 	// Test with first request from IP "127.0.0.1" - should allow
 	ctx1 := newTestCtx("127.0.0.1")
-	err1 := middleware(ctx1)
-	assert.Nil(t, err1, "First request should be allowed")
+	middleware(ctx1)
+	assert.NotEqual(t, ngebut.StatusTooManyRequests, ctx1.StatusCode(), "First request should be allowed")
 
 	// Test with second request from same IP - should be rate limited
 	ctx2 := newTestCtx("127.0.0.1")
-	err2 := middleware(ctx2)
-	assert.Equal(t, ErrLimiter, err2, "Second request should be rate limited")
+	middleware(ctx2)
 	assert.Equal(t, ngebut.StatusTooManyRequests, ctx2.StatusCode(), "Status code should be 429")
 
 	// Wait for rate limit window to reset
@@ -59,11 +58,11 @@ func TestRateLimit(t *testing.T) {
 
 	// Test with third request after window reset - should allow again
 	ctx3 := newTestCtx("127.0.0.1")
-	err3 := middleware(ctx3)
-	assert.Nil(t, err3, "Request after window reset should be allowed")
+	middleware(ctx3)
+	assert.NotEqual(t, ngebut.StatusTooManyRequests, ctx3.StatusCode(), "Request after window reset should be allowed")
 
 	// Test with different IP - should allow regardless of previous requests
 	ctx4 := newTestCtx("192.168.1.1")
-	err4 := middleware(ctx4)
-	assert.Nil(t, err4, "Request from different IP should be allowed")
+	middleware(ctx4)
+	assert.NotEqual(t, ngebut.StatusTooManyRequests, ctx4.StatusCode(), "Request from different IP should be allowed")
 }

@@ -25,7 +25,7 @@ type Visitor struct {
 var ErrLimiter = ngebut.NewHttpError(ngebut.StatusTooManyRequests, "limit reached")
 
 var (
-	// visitors stores the active visitors and their associated rate limiters.
+	// visitors store the active visitors and their associated rate limiters.
 	visitors = make(map[string]*Visitor)
 
 	// mu is a Mutex used to synchronize access to the shared visitors map,
@@ -36,15 +36,24 @@ var (
 // NewVisitor creates and returns a new rate limiter instance
 // based on the provided configuration.
 func NewVisitor(cfg Config) *rate.Limiter {
-	rateLimit := rate.Every(cfg.Duration / time.Duration(cfg.Requests))
+	// Calculate the rate as "duration divided by number of requests"
+	// For example, 1 request per second = 1 second / 1 request = 1 second interval
+	interval := cfg.Duration / time.Duration(cfg.Requests)
+	rateLimit := rate.Every(interval)
 	return rate.NewLimiter(rateLimit, cfg.Burst)
 }
 
 // CleanupVisitors periodically removes stale visitor entries
 // from the visitors map after they exceed the specified expiration duration.
 func CleanupVisitors(expiresIn time.Duration) {
+	// Use a shorter cleanup interval for short expiration times
+	cleanupInterval := time.Minute
+	if expiresIn < time.Minute {
+		cleanupInterval = expiresIn / 2
+	}
+
 	for {
-		time.Sleep(time.Minute)
+		time.Sleep(cleanupInterval)
 		mu.Lock()
 		for ip, v := range visitors {
 			if time.Since(v.lastSeen) > expiresIn {
@@ -73,39 +82,40 @@ func GetVisitor(ip string, cfg Config) *rate.Limiter {
 }
 
 // DefaultConfig returns a Config object with default rate limiting settings:
-// 1 request, burst of 5, a 1-minute duration window, and a 1-hour expiration time.
+// 1 request per second, burst of 0, and a 1-hour expiration time.
 func DefaultConfig() Config {
 	return Config{
 		Requests:  1,
-		Burst:     5,
-		Duration:  time.Minute,
+		Burst:     0,
+		Duration:  1 * time.Second,
 		ExpiresIn: time.Hour,
 	}
 }
 
 // New creates and returns rate limiting middleware for the Ngebut framework.
 // It accepts an optional custom Config; if none is provided, DefaultConfig is used.
-func New(config ...Config) func(c *ngebut.Ctx) error {
+func New(config ...Config) func(c *ngebut.Ctx) {
 
 	cfg := DefaultConfig()
 	if len(config) > 0 {
 		cfg = config[0]
-		go CleanupVisitors(config[0].ExpiresIn)
 	}
 
-	return func(c *ngebut.Ctx) error {
+	// Always start the cleanup goroutine
+	go CleanupVisitors(cfg.ExpiresIn)
+
+	return func(c *ngebut.Ctx) {
 		ip := c.IP()
 		limiter := GetVisitor(ip, cfg)
 
 		if !limiter.Allow() {
-			message := map[string]interface{}{
-				"Message": "rate limited reached",
-			}
-			c.Status(ngebut.StatusTooManyRequests).JSON(message)
-			return ErrLimiter
+			var rateLimitMessage = []byte(`{"Message":"rate limit reached"}`)
+			c.Status(ngebut.StatusTooManyRequests).
+				Set("Content-Type", "application/json").
+				Writer.Write(rateLimitMessage)
+			return
 		}
 
 		c.Next()
-		return nil
 	}
 }
