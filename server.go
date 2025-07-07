@@ -19,11 +19,11 @@ import (
 
 type noopLogger struct{}
 
-func (l *noopLogger) Debugf(format string, args ...interface{}) {}
-func (l *noopLogger) Infof(format string, args ...interface{})  {}
-func (l *noopLogger) Warnf(format string, args ...interface{})  {}
-func (l *noopLogger) Errorf(format string, args ...interface{}) {}
-func (l *noopLogger) Fatalf(format string, args ...interface{}) {}
+func (l *noopLogger) Debugf(_ string, _ ...interface{}) {}
+func (l *noopLogger) Infof(_ string, _ ...interface{})  {}
+func (l *noopLogger) Warnf(_ string, _ ...interface{})  {}
+func (l *noopLogger) Errorf(_ string, _ ...interface{}) {}
+func (l *noopLogger) Fatalf(_ string, _ ...interface{}) {}
 
 // Server represents an HTTP server.
 type Server struct {
@@ -553,6 +553,10 @@ func (s *Server) Listen(addr string) error {
 		gnet.WithTCPKeepAlive(s.httpServer.idleTimeout),
 		gnet.WithReadBufferCap(int(s.httpServer.readTimeout.Seconds())*1024),
 		gnet.WithWriteBufferCap(int(s.httpServer.writeTimeout.Seconds())*1024),
+		gnet.WithReadBufferCap(65536),  // 64KB read buffer
+		gnet.WithWriteBufferCap(65536), // 64KB write buffer
+		gnet.WithEdgeTriggeredIO(true),
+		gnet.WithEdgeTriggeredIOChunk(65536), // 64KB chunk size for edge-triggered IO
 	)
 }
 
