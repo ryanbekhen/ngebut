@@ -554,10 +554,10 @@ func (s *Server) Listen(addr string) error {
 		gnet.WithTCPKeepAlive(s.httpServer.idleTimeout),
 		gnet.WithReadBufferCap(int(s.httpServer.readTimeout.Seconds())*1024),
 		gnet.WithWriteBufferCap(int(s.httpServer.writeTimeout.Seconds())*1024),
-		gnet.WithReadBufferCap(32768),  // 32KB read buffer
-		gnet.WithWriteBufferCap(32768), // 32KB write buffer
+		gnet.WithReadBufferCap(65536),  // 64KB read buffer
+		gnet.WithWriteBufferCap(65536), // 64KB write buffer
 		gnet.WithEdgeTriggeredIO(true),
-		gnet.WithEdgeTriggeredIOChunk(32768), // 32KB chunk size for edge-triggered IO
+		gnet.WithEdgeTriggeredIOChunk(65536), // 64KB chunk size for edge-triggered IO
 	)
 }
 
