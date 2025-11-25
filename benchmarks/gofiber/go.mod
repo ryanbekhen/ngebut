@@ -2,7 +2,7 @@ module github.com/ryanbekhen/ngebut/benchmarks/gofiber
 
 go 1.24.3
 
-require github.com/gofiber/fiber/v2 v2.52.9
+require github.com/gofiber/fiber/v2 v2.52.10
 
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
